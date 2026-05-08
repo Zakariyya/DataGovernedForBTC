@@ -189,6 +189,42 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli orderbook-audit --max-
 - update 没有 sequence/checksum，不能证明连续性。
 - 后续如需 L2 feature，必须先实现有质量标签的重建器，且对无前置 snapshot、crossed book、depth 不足、stale book 做显式标记。
 
+## 里程碑 7：curated_btc_market_state_1m 最小 as-of join 原型
+
+完成时间：2026-05-08
+
+### ✅ 已完成
+
+- 新增 `curated_state.py`，实现朴素、清晰、可审计的 1m 主状态表原型。
+- 主时间轴使用 Candlestick `close_time_ms` / `available_time_ms`。
+- Funding / Borrowing 使用 as-of join：只允许 `available_time_ms <= feature_time_ms`。
+- Funding 显式限定 BTC-USDT-SWAP，不从 allswap 多 instrument 数据中随意取其他 instrument。
+- Borrowing 输出 BTC/ETH/USDT 的 raw rate 与 age 字段，不做单位换算。
+- Trade Feature 只接受当前 1m `feature_time_ms` 精确匹配；缺失时输出 `trade_feature_missing_reason=no_current_trade_feature`，不做无标记 forward fill。
+- CLI 新增 `curated-state-minimal --max-candle-files N --max-trade-files N`。
+- 按用户要求避免过度优化：当前实现不做复杂索引、不做性能工程，只作为时间因果正确性原型。
+
+### 📊 当前真实样本验证结果
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-minimal --max-candle-files 1 --max-trade-files 1
+```
+
+- 选中 candle 文件：2026-05-06 1m
+- 输出行数：1440
+- Funding 文件：396
+- Borrowing 文件：20
+- Trade feature 文件：1
+- 首行 funding_age_ms：60000
+- 首行 usdt_borrow_rate_age_ms：60000
+- Trade feature 因当前只生成了 2021 样本，与 2026 candle 不重叠，显式标记 missing。
+
+### 🔒 时间因果边界
+
+- 所有低频数据必须满足 `available_time_ms <= feature_time_ms`。
+- Funding / Borrowing forward-as-of 必须带 age 字段。
+- 当前不做无标记填充，不用未来 Trade feature 填当前 candle。
+
 ## 下一步建议
 
 1. 将 Trade 全量治理升级为流式 + Parquet + checkpoint，避免一次性写出超大 CSV。

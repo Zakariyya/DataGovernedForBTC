@@ -26,6 +26,9 @@ def build_parser() -> argparse.ArgumentParser:
     ob_parser = sub.add_parser("orderbook-audit", help="Run safe Orderbook JSONL audit without full L2 reconstruction.")
     ob_parser.add_argument("--max-lines", type=int, default=5000, help="Maximum JSONL rows per orderbook file to inspect.")
     ob_parser.add_argument("--max-files", type=int, default=None, help="Optional safety limit for processing the first N orderbook files.")
+    cur_parser = sub.add_parser("curated-state-minimal", help="Build minimal curated_btc_market_state_1m sample with time-causal as-of joins.")
+    cur_parser.add_argument("--max-candle-files", type=int, default=1, help="Number of normalized candle files to use.")
+    cur_parser.add_argument("--max-trade-files", type=int, default=1, help="Number of trade feature files to use.")
     sub.add_parser("audit-okx", help="Audit current OKX historical data directory.")
     return parser
 
@@ -71,6 +74,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "orderbook-audit":
         from datagovernedforbtc.orderbook import run_orderbook_audit
         print(json.dumps(run_orderbook_audit(root, max_lines=args.max_lines, max_files=args.max_files), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "curated-state-minimal":
+        from datagovernedforbtc.curated_state import run_curated_state_minimal
+        print(json.dumps(run_curated_state_minimal(root, max_candle_files=args.max_candle_files, max_trade_files=args.max_trade_files), ensure_ascii=False, indent=2))
         return 0
     if args.command == "audit-okx":
         from datagovernedforbtc.audit import run_okx_audit

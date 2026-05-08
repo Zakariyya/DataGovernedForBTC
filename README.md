@@ -81,6 +81,7 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli candlestick-minimal
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli low-frequency-minimal
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli trade-minimal --max-files 5
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli orderbook-audit --max-lines 5000
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-minimal --max-candle-files 1 --max-trade-files 1
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli audit-okx
 PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
 ```
@@ -100,5 +101,6 @@ PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
 - Orderbook 安全审计汇总：`reports/quality/orderbook_audit_summary.json`
 - Orderbook File Manifest / Quality：`manifests|reports/.../dataset_type=orderbook/market=.../instrument=.../exchange_date_utc8=*`
 - Orderbook sample feature（仅 snapshot 样本，不代表完整 L2 重建）：`data_lake/features/exchange=okx/dataset_type=orderbook_sample_feature/market=.../instrument=.../exchange_date_utc8=*/orderbook_sample_features.csv`
+- Curated BTC Market State 1m 最小样本：`data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=1m/sample=minimal/curated_btc_market_state_1m.csv`
 - OKX 目录审计 JSON：`reports/coverage/okx_directory_audit.json`
 - OKX 目录审计 Markdown：`reports/coverage/okx_directory_audit.md`
