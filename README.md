@@ -80,6 +80,7 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli layout
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli candlestick-minimal
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli low-frequency-minimal
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli trade-minimal --max-files 5
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli orderbook-audit --max-lines 5000
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli audit-okx
 PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
 ```
@@ -96,5 +97,8 @@ PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
 - Trade 安全样本闭环汇总：`reports/quality/trade_minimal_summary.json`
 - Trade Normalized Tick（治理产物，不给 AlphaTenant 直接读取）：`data_lake/normalized/exchange=okx/dataset_type=trade/market=.../instrument=.../exchange_date_utc8=*/trade_normalized.csv`
 - Trade 1m Feature：`data_lake/features/exchange=okx/dataset_type=trade_feature/market=.../instrument=.../interval=1m/exchange_date_utc8=*/trade_features_1m.csv`
+- Orderbook 安全审计汇总：`reports/quality/orderbook_audit_summary.json`
+- Orderbook File Manifest / Quality：`manifests|reports/.../dataset_type=orderbook/market=.../instrument=.../exchange_date_utc8=*`
+- Orderbook sample feature（仅 snapshot 样本，不代表完整 L2 重建）：`data_lake/features/exchange=okx/dataset_type=orderbook_sample_feature/market=.../instrument=.../exchange_date_utc8=*/orderbook_sample_features.csv`
 - OKX 目录审计 JSON：`reports/coverage/okx_directory_audit.json`
 - OKX 目录审计 Markdown：`reports/coverage/okx_directory_audit.md`

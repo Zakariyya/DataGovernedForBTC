@@ -23,6 +23,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("low-frequency-minimal", help="Run Funding/Borrowing + File Manifest + Quality Report minimal loop.")
     trade_parser = sub.add_parser("trade-minimal", help="Run Trade + File Manifest + Quality Report + 1m feature minimal loop.")
     trade_parser.add_argument("--max-files", type=int, default=None, help="Optional safety limit for processing the first N trade files.")
+    ob_parser = sub.add_parser("orderbook-audit", help="Run safe Orderbook JSONL audit without full L2 reconstruction.")
+    ob_parser.add_argument("--max-lines", type=int, default=5000, help="Maximum JSONL rows per orderbook file to inspect.")
+    ob_parser.add_argument("--max-files", type=int, default=None, help="Optional safety limit for processing the first N orderbook files.")
     sub.add_parser("audit-okx", help="Audit current OKX historical data directory.")
     return parser
 
@@ -64,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "trade-minimal":
         from datagovernedforbtc.trade import run_trade_minimal
         print(json.dumps(run_trade_minimal(root, max_files=args.max_files), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "orderbook-audit":
+        from datagovernedforbtc.orderbook import run_orderbook_audit
+        print(json.dumps(run_orderbook_audit(root, max_lines=args.max_lines, max_files=args.max_files), ensure_ascii=False, indent=2))
         return 0
     if args.command == "audit-okx":
         from datagovernedforbtc.audit import run_okx_audit

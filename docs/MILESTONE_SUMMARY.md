@@ -153,6 +153,42 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli trade-minimal --max-fi
 - `side` 不被解释为 taker side，避免错误生成 aggressive 类方向特征。
 - 全量 1215 文件约 21GB raw，后续全量治理应先升级为流式处理与 Parquet/分批断点续跑。
 
+## 里程碑 6：Orderbook L2 安全审计入口
+
+完成时间：2026-05-08
+
+### ✅ 已完成
+
+- 新增 `orderbook.py`，实现 L2 JSON Lines 安全审计入口。
+- CLI 新增 `orderbook-audit --max-lines N --max-files N`，默认每个文件只抽样前 5000 行，避免误触发 3GB+ L2 全量重建。
+- 生成 Orderbook File Manifest、Quality Report 与 snapshot sample feature。
+- 统计 snapshot/update 数量、无前置 snapshot 的 update、empty asks/bids、depth level、depth=400 完整度、snapshot crossed book。
+- 明确不应用 update 重建完整盘口；无 sequence/checksum 时只标记 `book_reconstruction_quality`，不证明连续性。
+- 修正一个重要语义坑：update 行的 asks/bids 是增量更新数组，不能直接用 update 数组判断 `best_bid < best_ask`；crossed book 只对 snapshot / sample feature 判断。
+
+### 📊 当前真实样本验证结果
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli orderbook-audit --max-lines 5000
+```
+
+- Orderbook 源文件：5
+- 成功解析：5
+- 失败：0
+- sample feature rows：5
+- manifest：5
+- quality report：5
+- sample feature CSV：5
+- snapshot crossed book：0
+- update_without_snapshot：0
+- book_reconstruction_quality：`snapshot_only_sample`
+
+### 🔒 Future-Leak / L2 质量边界
+
+- 当前只审计 snapshot 样本，不把 raw L2 或 update 重建盘口直接交给 AlphaTenant。
+- update 没有 sequence/checksum，不能证明连续性。
+- 后续如需 L2 feature，必须先实现有质量标签的重建器，且对无前置 snapshot、crossed book、depth 不足、stale book 做显式标记。
+
 ## 下一步建议
 
 1. 将 Trade 全量治理升级为流式 + Parquet + checkpoint，避免一次性写出超大 CSV。
