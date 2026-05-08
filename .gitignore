@@ -37,15 +37,10 @@ credentials/
 # -----------------------------
 # Raw OKX market data: never commit
 # -----------------------------
-okx/**/*.csv
-okx/**/*.zip
-okx/**/*.data
-okx/**/*.data.txt
-okx/**/*.json
-okx/**/*.parquet
-okx/**/*.gz
-okx/**/*.zst
-okx/**/*.lz4
+# Treat the whole Raw Source Zone as local-only. OKX archives may appear as
+# .csv/.zip/.data/.tar.gz/.tar.tar or other exchange-specific extensions;
+# extension-based ignores are not safe enough.
+okx/
 
 # -----------------------------
 # Generated governance outputs: reproducible, do not commit by default
