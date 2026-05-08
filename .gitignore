@@ -1,0 +1,82 @@
+# DataGovernedForBTC git ignore policy
+# 目标：提交治理代码、配置、文档、测试与目录占位；禁止提交 OKX 原始市场数据、治理生成产物、缓存、密钥和本地环境。
+
+# -----------------------------
+# Python / tooling cache
+# -----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# -----------------------------
+# Local virtual environments
+# -----------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# -----------------------------
+# Secrets / local-only config
+# -----------------------------
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.crt
+*.secret
+secrets/
+credentials/
+
+# -----------------------------
+# Raw OKX market data: never commit
+# -----------------------------
+okx/**/*.csv
+okx/**/*.zip
+okx/**/*.data
+okx/**/*.data.txt
+okx/**/*.json
+okx/**/*.parquet
+okx/**/*.gz
+okx/**/*.zst
+okx/**/*.lz4
+
+# -----------------------------
+# Generated governance outputs: reproducible, do not commit by default
+# -----------------------------
+manifests/**/*.json
+reports/**/*.json
+reports/**/*.md
+data_lake/**/*.csv
+data_lake/**/*.parquet
+data_lake/**/*.json
+data_lake/**/*.duckdb
+snapshots/**/*.csv
+snapshots/**/*.parquet
+snapshots/**/*.json
+snapshots/**/*.duckdb
+
+# -----------------------------
+# Local databases / logs / temp files
+# -----------------------------
+*.duckdb
+*.duckdb.wal
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# -----------------------------
+# Keep empty directory placeholders tracked
+# -----------------------------
+!.gitkeep

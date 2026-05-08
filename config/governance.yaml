@@ -1,0 +1,47 @@
+governance_version: "0.1.0"
+schema_version: "0.1.0"
+feature_version: "0.1.0"
+regime_version: "0.1.0"
+exchange: "okx"
+source_calendar_timezone: "UTC+8"
+training_time_axis_timezone: "UTC"
+
+latency_ms:
+  candlestick: 0
+  funding_rate: 0
+  borrowing_rate: 0
+  trade: 0
+  orderbook: 0
+
+borrow_rate_unit:
+  default: "unknown_raw"
+  allowed_values:
+    - "unknown_raw"
+    - "hourly_decimal"
+    - "daily_decimal"
+    - "annualized_decimal"
+    - "percentage"
+
+max_age_ms:
+  borrow_rate: 7200000       # 2 hours
+  orderbook_feature: 300000  # 5 minutes
+  trade_feature: 60000       # 1 minute
+
+candlestick:
+  default_interval: "1m"
+  expected_rows_per_exchange_day_utc8: 1440
+  use_only_confirmed: true
+  feature_time: "close_time_ms"
+
+funding_rate:
+  field_semantics: "official_realized"
+  infer_interval_from_adjacent_events: true
+
+trade:
+  side_semantics: "unknown_not_assumed_taker_side"
+  dedupe_key: "trade_id"
+
+orderbook:
+  depth_levels: 400
+  require_snapshot_before_update: true
+  sequence_continuity: "not_provable_without_sequence_or_checksum"
