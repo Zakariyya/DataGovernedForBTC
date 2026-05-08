@@ -79,6 +79,7 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli --help
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli layout
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli candlestick-minimal
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli low-frequency-minimal
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli trade-minimal --max-files 5
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli audit-okx
 PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
 ```
@@ -86,11 +87,14 @@ PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
 ## 📦 当前已生成的治理产物
 
 - Candlestick 最小闭环汇总：`reports/quality/candlestick_minimal_summary.json`
-- Candlestick File Manifest：`manifests/exchange=okx/dataset_type=candlestick/instrument=BTC-USDT/exchange_date_utc8=*/file_manifest.json`
-- Candlestick Quality Report：`reports/quality/exchange=okx/dataset_type=candlestick/instrument=BTC-USDT/exchange_date_utc8=*/quality_report.json`
-- Candlestick Normalized CSV：`data_lake/normalized/exchange=okx/dataset_type=candlestick/instrument=BTC-USDT/interval=1m/exchange_date_utc8=*/candlestick_normalized.csv`
+- Candlestick File Manifest：`manifests/exchange=okx/dataset_type=candlestick/market=spot|perpetual/instrument=BTC-USDT/exchange_date_utc8=*/file_manifest.json`
+- Candlestick Quality Report：`reports/quality/exchange=okx/dataset_type=candlestick/market=spot|perpetual/instrument=BTC-USDT/exchange_date_utc8=*/quality_report.json`
+- Candlestick Normalized CSV：`data_lake/normalized/exchange=okx/dataset_type=candlestick/market=spot|perpetual/instrument=BTC-USDT/interval=1m/exchange_date_utc8=*/candlestick_normalized.csv`
 - Funding/Borrowing 最小闭环汇总：`reports/quality/low_frequency_minimal_summary.json`
 - Funding File Manifest / Quality / Normalized：`manifests|reports|data_lake/.../dataset_type=funding_rate/...`
 - Borrowing File Manifest / Quality / Normalized：`manifests|reports|data_lake/.../dataset_type=borrowing_rate/...`
+- Trade 安全样本闭环汇总：`reports/quality/trade_minimal_summary.json`
+- Trade Normalized Tick（治理产物，不给 AlphaTenant 直接读取）：`data_lake/normalized/exchange=okx/dataset_type=trade/market=.../instrument=.../exchange_date_utc8=*/trade_normalized.csv`
+- Trade 1m Feature：`data_lake/features/exchange=okx/dataset_type=trade_feature/market=.../instrument=.../interval=1m/exchange_date_utc8=*/trade_features_1m.csv`
 - OKX 目录审计 JSON：`reports/coverage/okx_directory_audit.json`
 - OKX 目录审计 Markdown：`reports/coverage/okx_directory_audit.md`

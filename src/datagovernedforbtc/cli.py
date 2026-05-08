@@ -21,6 +21,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("candlestick-minimal", help="Run Candlestick + File Manifest + Quality Report minimal loop.")
     sub.add_parser("simple-manifest-quality", help="Run Manifest + Quality Report loops for Funding/Borrowing/Trade.")
     sub.add_parser("low-frequency-minimal", help="Run Funding/Borrowing + File Manifest + Quality Report minimal loop.")
+    trade_parser = sub.add_parser("trade-minimal", help="Run Trade + File Manifest + Quality Report + 1m feature minimal loop.")
+    trade_parser.add_argument("--max-files", type=int, default=None, help="Optional safety limit for processing the first N trade files.")
     sub.add_parser("audit-okx", help="Audit current OKX historical data directory.")
     return parser
 
@@ -58,6 +60,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "low-frequency-minimal":
         from datagovernedforbtc.low_frequency import run_low_frequency_minimal
         print(json.dumps(run_low_frequency_minimal(root), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "trade-minimal":
+        from datagovernedforbtc.trade import run_trade_minimal
+        print(json.dumps(run_trade_minimal(root, max_files=args.max_files), ensure_ascii=False, indent=2))
         return 0
     if args.command == "audit-okx":
         from datagovernedforbtc.audit import run_okx_audit

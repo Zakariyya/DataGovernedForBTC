@@ -115,9 +115,47 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli low-frequency-minimal
 - Borrowing manifest：20，market=spot
 - 所有 manifest 数量均与对应源文件数一致。
 
+## 里程碑 5：Trade History 治理与 1m 聚合特征安全样本闭环
+
+完成时间：2026-05-08
+
+### ✅ 已完成
+
+- 新增 `trade.py`，实现 Trade File Manifest + Quality Report + normalized tick + 1m trade feature 输出。
+- 按 `trade_id` 去重，按 `created_time` 排序，不假设原文件有序。
+- 保留 `side_raw`，显式标记 `side_semantics=unknown_not_assumed_taker`。
+- 不生成 `aggressive_buy_volume`、`aggressive_sell_volume`、`aggressive_delta` 等 taker-side 依赖字段。
+- 1m 聚合窗口使用 `window_start_ms <= created_time < window_end_ms`，并将 `feature_time_ms = available_time_ms = window_end_ms`。
+- CLI 新增 `trade-minimal --max-files N`，避免在 21GB raw trade 数据上误触发一次性全量 normalized tick 输出。
+
+### 📊 当前真实样本验证结果
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli trade-minimal --max-files 5
+```
+
+- Trade 总发现源文件：1215
+- 本次安全样本源文件：5
+- 成功解析：5
+- 失败：0
+- normalized rows：2,363,551
+- 1m feature rows：7,200
+- duplicate trade_id：0
+- 生成 manifest：5
+- 生成 quality report：5
+- 生成 normalized CSV：5
+- 生成 1m feature CSV：5
+
+### 🔒 Future-Leak 防护
+
+- 原始 tick 不直接给 AlphaTenant 使用。
+- 1m Trade Feature 只在窗口结束后可用。
+- `side` 不被解释为 taker side，避免错误生成 aggressive 类方向特征。
+- 全量 1215 文件约 21GB raw，后续全量治理应先升级为流式处理与 Parquet/分批断点续跑。
+
 ## 下一步建议
 
-1. 将 Candlestick / Funding / Borrowing normalized CSV 升级为 Parquet。
-2. 实现 Trade History Manifest + Quality + 聚合特征入口。
-3. 实现 Orderbook 安全审计入口：snapshot/update、crossed book、best_bid/best_ask、无前置 snapshot update。
-4. 构建 `curated_btc_market_state_1m` 的 as-of join 原型。
+1. 将 Trade 全量治理升级为流式 + Parquet + checkpoint，避免一次性写出超大 CSV。
+2. 实现 Orderbook 安全审计入口：snapshot/update、crossed book、best_bid/best_ask、无前置 snapshot update。
+3. 构建 `curated_btc_market_state_1m` 的 as-of join 原型。
+4. 将 Candlestick / Funding / Borrowing / Trade Feature 统一升级为 Parquet 优先输出。
