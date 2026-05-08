@@ -29,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     cur_parser = sub.add_parser("curated-state-minimal", help="Build minimal curated_btc_market_state_1m sample with time-causal as-of joins.")
     cur_parser.add_argument("--max-candle-files", type=int, default=1, help="Number of normalized candle files to use.")
     cur_parser.add_argument("--max-trade-files", type=int, default=1, help="Number of trade feature files to use.")
+    sub.add_parser("feature-scan", help="Scan raw feature points and output AlphaTenant target dataset shape report.")
     sub.add_parser("audit-okx", help="Audit current OKX historical data directory.")
     return parser
 
@@ -78,6 +79,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "curated-state-minimal":
         from datagovernedforbtc.curated_state import run_curated_state_minimal
         print(json.dumps(run_curated_state_minimal(root, max_candle_files=args.max_candle_files, max_trade_files=args.max_trade_files), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "feature-scan":
+        from datagovernedforbtc.feature_scan import run_feature_scan
+        print(json.dumps(run_feature_scan(root), ensure_ascii=False, indent=2))
         return 0
     if args.command == "audit-okx":
         from datagovernedforbtc.audit import run_okx_audit

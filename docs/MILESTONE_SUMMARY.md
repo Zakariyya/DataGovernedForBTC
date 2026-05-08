@@ -225,9 +225,56 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-minimal 
 - Funding / Borrowing forward-as-of 必须带 age 字段。
 - 当前不做无标记填充，不用未来 Trade feature 填当前 candle。
 
+## 里程碑 8：OKX 最新数据特征点扫描与 AlphaTenant 数据集形状确认
+
+完成时间：2026-05-08
+
+### ✅ 已完成
+
+- 新增 `feature_scan.py`，对 `okx/` 最新 Raw Source Zone 做轻量特征点扫描。
+- CLI 新增 `feature-scan`，输出 JSON 与 Markdown 报告。
+- 扫描只读取路径、日期、扩展名、表头/少量 JSONL key，不全量加载 46GB+ raw 数据。
+- 明确给 AlphaTenant 的目标数据集形状：
+  - `curated_btc_market_state_1m`
+  - `curated_btc_market_state_5m`
+  - `btc_regime_1m`
+  - `data_quality_report`
+- 修正 scanner：Orderbook 新增 `.tar.gz` 归档必须计入文件覆盖，但字段抽样优先读取 `.data/.data.txt`，不展开大归档。
+
+### 📊 最新 Raw Feature Point 扫描结果
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli feature-scan
+```
+
+- Borrowing Rate：34 文件，spot，2021-12-14 → 2026-05-06，字段 `currency_name, borrow_rate, time`
+- Candlestick：374 文件，perpetual 184 / spot 190，2023-07-01 → 2026-05-06，字段 `instrument_name, open, high, low, close, vol, vol_ccy, vol_quote, open_time, confirm`
+- Funding Rate：396 文件，perpetual，2022-03-01 → 2026-05-06，字段 `instrument_name, funding_rate, funding_time`
+- Orderbook：16 文件，spot，2025-01-01 → 2026-05-05，扩展名 `.data` 5 / `.tar.gz` 11，字段 `action, asks, bids, instId, ts`
+- Trade：1672 文件，perpetual 457 / spot 1215，2021-09-01 → 2026-05-06，字段 `instrument_name, trade_id, side, price, size, created_time`
+
+### 🎯 AlphaTenant 后续数据集形状判断
+
+- 第一优先：`curated_btc_market_state_1m`
+  - 主键：`exchange, instrument_name, feature_time_ms`
+  - 粒度：BTC-USDT 1m candle close_time 一行
+  - 必备字段：OHLCV、Funding、Borrowing、Trade 1m、Orderbook-derived、质量分
+  - 必备 age 字段：`funding_age_ms`, `btc/eth/usdt_borrow_rate_age_ms`, `trade_feature_age_ms`, `orderbook_feature_age_ms`
+- 第二优先：`data_quality_report`
+  - 作为 AlphaTenant 数据准入门，不通过质量闸门的数据不能进入训练。
+- 第三优先：`btc_regime_1m`
+  - 基于 curated state 的可解释 rule-based regime，不使用未来 rolling / 全样本 quantile。
+- `curated_btc_market_state_5m` 后续应从 1m governed state 聚合，不直接绕过 1m 质量层。
+
+### 🔒 边界
+
+- AlphaTenant 仍不能读取 raw CSV、raw tick、raw L2、未治理归档或无版本特征。
+- 当前扫描用于确认形状，不代表数据已全部可进入 AlphaTenant。
+- 不做过度优化：本轮只产出轻量 scanner 与形状报告，后续按质量闸门逐步补齐。
+
 ## 下一步建议
 
-1. 将 Trade 全量治理升级为流式 + Parquet + checkpoint，避免一次性写出超大 CSV。
-2. 实现 Orderbook 安全审计入口：snapshot/update、crossed book、best_bid/best_ask、无前置 snapshot update。
-3. 构建 `curated_btc_market_state_1m` 的 as-of join 原型。
-4. 将 Candlestick / Funding / Borrowing / Trade Feature 统一升级为 Parquet 优先输出。
+1. 为 `curated_btc_market_state_1m` 增加轻量质量闸门：future-leak 检查、age 超限检查、missing 占比、overall_data_quality_score。
+2. 将 Trade 全量治理升级为流式 + Parquet + checkpoint，避免一次性写出超大 CSV。
+3. 将 Orderbook `.tar.gz` 归档纳入安全解包/抽样审计入口，仍不直接重建或喂给 AlphaTenant。
+4. 在质量闸门稳定后，再将 Candlestick / Funding / Borrowing / Trade Feature 统一升级为 Parquet 优先输出。
