@@ -278,3 +278,38 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli feature-scan
 2. 将 Trade 全量治理升级为流式 + Parquet + checkpoint，避免一次性写出超大 CSV。
 3. 将 Orderbook `.tar.gz` 归档纳入安全解包/抽样审计入口，仍不直接重建或喂给 AlphaTenant。
 4. 在质量闸门稳定后，再将 Candlestick / Funding / Borrowing / Trade Feature 统一升级为 Parquet 优先输出。
+
+## 里程碑 9：curated_btc_market_state_1m 轻量质量闸门
+
+完成时间：2026-05-09
+
+### ✅ 已完成
+
+- 为 `curated_btc_market_state_1m` 增加行级质量闸门字段：
+  - `future_leak_violation_count`
+  - `data_quality_flags`
+  - `missing_or_stale_source_count`
+  - `overall_data_quality_score`
+  - `allow_into_feature_layer`
+- 对 Funding / Borrowing age 设置保守上限，超限时打标而不是静默准入。
+- 对 BTC/ETH/USDT Borrowing 缺失、Trade Feature 缺失做显式 flags。
+- 保持 Trade Feature 只能精确匹配当前 1m `feature_time_ms`；不做无标记 forward fill。
+- 新增 TDD 单测覆盖 missing / stale source 的质量闸门行为。
+
+### 📊 当前真实样本验证结果
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-minimal --max-candle-files 1 --max-trade-files 1
+```
+
+- 输出行数：1440
+- 质量闸门字段已写入 CSV。
+- `future_leak_violation_count=0`。
+- 当前样本中 2026 candle 与已生成 2021 trade feature 样本不重叠，因此 1440 行均标记 `trade_feature_missing`。
+- `allow_into_feature_layer=False`：这是预期的保守准入结果，表示当前 minimal sample 还不能直接交给 AlphaTenant 训练/研究使用。
+
+### 🔒 AlphaTenant 准入边界
+
+- `feature-scan` 与 curated minimal 原型仍只是治理证据，不等于数据准入许可。
+- AlphaTenant 后续只能消费 `allow_into_feature_layer=True` 且版本/质量报告匹配的 governed feature/regime/snapshot。
+- 若 Trade / Orderbook 特征未覆盖当前 1m 时间戳，必须以缺失/过期 flag 表示，不允许静默补值或用未来数据回填。

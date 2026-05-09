@@ -10,6 +10,10 @@ from .io_utils import write_csv_rows
 from .time_semantics import ms_to_utc_iso
 
 
+MAX_FUNDING_AGE_MS = 24 * 60 * 60 * 1000
+MAX_BORROW_AGE_MS = 24 * 60 * 60 * 1000
+
+
 def read_csv_dicts(path: Path) -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8", newline="") as f:
         return list(csv.DictReader(f))
@@ -29,6 +33,42 @@ def asof_row(rows: list[dict[str, Any]], t: int, time_field: str = "available_ti
         else:
             break
     return candidate
+
+
+def finalize_quality_gate(row: dict[str, Any]) -> None:
+    """Attach a conservative, auditable quality gate to a curated 1m row."""
+    flags: list[str] = []
+    future_leak_violation_count = 0
+    feature_time = as_int(row.get("feature_time_ms"), -1)
+
+    funding_age = row.get("funding_age_ms")
+    if funding_age == "":
+        flags.append("funding_missing")
+    elif as_int(funding_age) > MAX_FUNDING_AGE_MS:
+        flags.append("funding_age_exceeds_max")
+
+    for ccy in ("btc", "eth", "usdt"):
+        rate_key = f"{ccy}_borrow_rate_raw"
+        age_key = f"{ccy}_borrow_rate_age_ms"
+        age_value = row.get(age_key)
+        if row.get(rate_key) == "":
+            flags.append(f"{ccy}_borrow_rate_missing")
+        elif age_value != "" and as_int(age_value) > MAX_BORROW_AGE_MS:
+            flags.append(f"{ccy}_borrow_rate_age_exceeds_max")
+
+    if row.get("trade_feature_missing_reason"):
+        flags.append("trade_feature_missing")
+    else:
+        trade_feature_time = as_int(row.get("trade_feature_time_ms"), feature_time)
+        trade_age = feature_time - trade_feature_time
+        if trade_age != 0:
+            flags.append("trade_feature_not_current_1m")
+
+    row["future_leak_violation_count"] = future_leak_violation_count
+    row["data_quality_flags"] = ";".join(flags)
+    row["missing_or_stale_source_count"] = len(flags)
+    row["overall_data_quality_score"] = f"{max(0.0, 1.0 - 0.1 * len(flags) - 0.5 * future_leak_violation_count):.4f}"
+    row["allow_into_feature_layer"] = future_leak_violation_count == 0 and not flags
 
 
 def build_curated_market_state_1m(
@@ -90,7 +130,13 @@ def build_curated_market_state_1m(
             "volume_delta_1m": "",
             "volume_delta_ratio_1m": "",
             "trade_feature_missing_reason": "",
+            "trade_feature_time_ms": "",
             "trade_quality_score": "",
+            "future_leak_violation_count": 0,
+            "data_quality_flags": "",
+            "missing_or_stale_source_count": 0,
+            "overall_data_quality_score": "",
+            "allow_into_feature_layer": False,
             "schema_version": candle.get("schema_version", versions.schema_version),
             "feature_version": versions.feature_version,
             "governance_version": candle.get("governance_version", versions.governance_version),
@@ -117,10 +163,12 @@ def build_curated_market_state_1m(
                 "sell_volume_1m": trade.get("sell_volume_1m", ""),
                 "volume_delta_1m": trade.get("volume_delta_1m", ""),
                 "volume_delta_ratio_1m": trade.get("volume_delta_ratio_1m", ""),
+                "trade_feature_time_ms": trade.get("feature_time_ms") or trade.get("available_time_ms", ""),
                 "trade_quality_score": trade.get("data_quality_score", ""),
             })
         else:
             row["trade_feature_missing_reason"] = "no_current_trade_feature"
+        finalize_quality_gate(row)
         output.append(row)
     return output
 

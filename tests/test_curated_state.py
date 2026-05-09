@@ -76,6 +76,49 @@ class CuratedStateTest(unittest.TestCase):
         self.assertEqual(second["trade_count_1m"], "")
         self.assertEqual(second["trade_feature_missing_reason"], "no_current_trade_feature")
 
+    def test_quality_gate_flags_missing_and_stale_sources(self):
+        candles = [
+            {
+                "exchange": "okx",
+                "instrument_name": "BTC-USDT",
+                "source_market_type": "spot",
+                "close_time_ms": 90000000,
+                "available_time_ms": 90000000,
+                "open": "100",
+                "high": "101",
+                "low": "99",
+                "close": "100.5",
+                "vol_base": "10",
+                "vol_quote": "1000",
+                "data_quality_score": "1.0",
+            }
+        ]
+        funding = [
+            {
+                "instrument_name": "BTC-USDT-SWAP",
+                "available_time_ms": 0,
+                "realized_funding_rate": "0.001",
+                "funding_interval_ms": "28800000",
+                "data_quality_score": "1.0",
+            }
+        ]
+        borrowing = [
+            {"currency_name": "USDT", "available_time_ms": 0, "borrow_rate_raw": "0.01", "data_quality_score": "1.0"}
+        ]
+
+        rows = build_curated_market_state_1m(candles, funding, borrowing, trade_feature_rows=[])
+
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["future_leak_violation_count"], 0)
+        self.assertEqual(row["allow_into_feature_layer"], False)
+        self.assertLess(float(row["overall_data_quality_score"]), 1.0)
+        self.assertIn("funding_age_exceeds_max", row["data_quality_flags"])
+        self.assertIn("btc_borrow_rate_missing", row["data_quality_flags"])
+        self.assertIn("eth_borrow_rate_missing", row["data_quality_flags"])
+        self.assertIn("usdt_borrow_rate_age_exceeds_max", row["data_quality_flags"])
+        self.assertIn("trade_feature_missing", row["data_quality_flags"])
+
 
 if __name__ == "__main__":
     unittest.main()
