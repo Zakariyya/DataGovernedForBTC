@@ -81,6 +81,7 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli candlestick-minimal
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli low-frequency-minimal
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli trade-minimal --max-files 5
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli orderbook-audit --max-lines 5000
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli orderbook-stream-features --start-date 2024-05-20 --end-date 2024-05-20 --market spot --instrument BTC-USDT --resume
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-minimal --max-candle-files 1 --max-trade-files 1
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli feature-scan
 PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli audit-okx

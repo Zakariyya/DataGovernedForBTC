@@ -664,3 +664,91 @@ checkpoint 示例：
 - 为了按 `trade_id` 去重，当前仍维护文件级 seen trade_id 集合；这比完整 normalized rows 列表轻得多，但多年极端大文件仍可能需要外部排序/去重或 spill-to-disk。
 - normalized Parquet 的行顺序跟 raw source 读取顺序一致；1m feature 聚合不依赖该顺序。
 
+## 里程碑 15：Orderbook Streaming Parquet Feature + Checkpoint 治理升级
+
+完成时间：2026-05-09
+
+### ✅ 已完成
+
+在已有 `orderbook-minute-features` 的基础上，新增长期窗口优先使用的流式 Orderbook 特征治理入口：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli orderbook-stream-features \
+  --start-date 2024-05-20 \
+  --end-date 2024-05-20 \
+  --market spot \
+  --instrument BTC-USDT \
+  --resume
+```
+
+核心变化：
+
+- 新增 `orderbook-stream-features` CLI。
+- 流式读取 `.data` / `.tar.gz` / `.tar.tar`，不把归档解压落盘。
+- 不输出全量 normalized L2 event；只输出治理后的 1m Orderbook Feature Parquet。
+- 输出路径：
+
+```text
+data_lake/features/exchange=okx/dataset_type=orderbook_feature/market=spot/instrument=BTC-USDT/interval=1m/format=parquet/exchange_date_utc8=*/orderbook_features_1m.parquet
+```
+
+- 新增 source-file 粒度 checkpoint：
+
+```text
+checkpoints/exchange=okx/dataset_type=orderbook_feature/market=spot/instrument=BTC-USDT/exchange_date_utc8=*/checkpoint.json
+```
+
+- checkpoint 记录 source hash、feature rows、snapshot/update 统计、crossed book、update_without_snapshot、输出 Parquet hash 与 `processing_engine=streaming_orderbook_feature_parquet_v1`。
+- `--resume` 仅在 checkpoint completed、source hash 一致、processing engine 一致且 Parquet 输出存在时跳过。
+- `curated-state-window` 已支持同分区 Orderbook Feature CSV / Parquet 并存时优先读取 Parquet。
+
+### 🧪 TDD 覆盖
+
+新增测试：
+
+- `tests/test_orderbook_streaming_checkpoint.py`
+  - 验证 Orderbook stream 写出 Parquet + checkpoint。
+  - 验证第二次 `--resume` 跳过 completed source。
+  - 验证 curated state 在同分区 CSV/Parquet 并存时优先读取 Parquet。
+- `tests/test_orderbook_stream_cli.py`
+  - 验证 CLI 可执行 date-bounded Parquet checkpoint 模式，并支持 `--no-resume`。
+
+全量测试：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m compileall -q src tests
+PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
+```
+
+结果：35 tests OK。
+
+### 📊 真实单日 smoke 验证
+
+命令：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli orderbook-stream-features \
+  --start-date 2024-05-20 \
+  --end-date 2024-05-20 \
+  --market spot \
+  --instrument BTC-USDT \
+  --resume
+```
+
+结果：
+
+- source_file_count：1
+- processed_count：1
+- total_feature_rows_1m：1440
+- crossed_book_count：0
+- update_without_snapshot_count：0
+- book_reconstruction_quality：`best_effort_reconstructed_without_sequence_checksum`
+- 第二次同命令：processed_count=0，skipped_count=1。
+
+### 🔒 当前边界
+
+- Orderbook streaming 仍是 best-effort 重建，不是严格可证明 L2 reconstruction。
+- 原始数据没有 sequence/checksum 时，必须保留 `best_effort_reconstructed_without_sequence_checksum` 标签。
+- 不向 AlphaTenant 暴露 raw L2、临时解压 `.data` 或全量 normalized L2 event。
+- checkpoint 粒度为 source file；失败时重跑该 source file，暂不做 archive 内部 offset resume，避免过度工程化。
+

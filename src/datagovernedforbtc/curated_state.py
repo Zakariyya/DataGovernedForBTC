@@ -306,11 +306,12 @@ def run_curated_state_window(root: Path, start_date: str, end_date: str, label: 
         start_date,
         end_date,
     ))
-    orderbook_paths = filter_paths_by_date(
-        list((root / "data_lake" / "features" / "exchange=okx" / "dataset_type=orderbook_feature" / "market=spot" / "instrument=BTC-USDT" / "interval=1m").rglob("orderbook_features_1m.csv")),
+    orderbook_paths = prefer_parquet_by_partition(filter_paths_by_date(
+        list((root / "data_lake" / "features" / "exchange=okx" / "dataset_type=orderbook_feature" / "market=spot" / "instrument=BTC-USDT" / "interval=1m").rglob("orderbook_features_1m.csv"))
+        + list((root / "data_lake" / "features" / "exchange=okx" / "dataset_type=orderbook_feature" / "market=spot" / "instrument=BTC-USDT" / "interval=1m").rglob("orderbook_features_1m.parquet")),
         start_date,
         end_date,
-    )
+    ))
     candles = load_csvs(candle_paths)
     funding = load_csvs(funding_paths)
     borrowing = load_csvs(borrowing_paths)

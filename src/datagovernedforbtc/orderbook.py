@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .config import GovernanceVersions
-from .io_utils import sha256_file, write_csv_rows
+from .io_utils import sha256_file, write_csv_rows, write_parquet_rows
 from .path_semantics import infer_instrument_type_from_path, infer_source_market_type
 from .time_semantics import exchange_date_utc8_from_ms, ms_to_utc_iso
 
@@ -482,6 +482,171 @@ def select_orderbook_source_files(root: Path, start_date: str | None = None, end
         seen.add(key)
         selected.append(p)
     return selected[:max_files] if max_files is not None else selected
+
+
+ORDERBOOK_STREAM_ENGINE = "streaming_orderbook_feature_parquet_v1"
+
+
+def checkpoint_path_for_orderbook(root: Path, market: str, instrument: str, source_date: str) -> Path:
+    return root / "checkpoints" / "exchange=okx" / "dataset_type=orderbook_feature" / f"market={market}" / f"instrument={instrument}" / f"exchange_date_utc8={source_date}" / "checkpoint.json"
+
+
+def read_json_if_exists(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def orderbook_feature_parquet_path(root: Path, market: str, instrument: str, source_date: str) -> Path:
+    return root / "data_lake" / "features" / "exchange=okx" / "dataset_type=orderbook_feature" / f"market={market}" / f"instrument={instrument}" / "interval=1m" / "format=parquet" / f"exchange_date_utc8={source_date}" / "orderbook_features_1m.parquet"
+
+
+def completed_orderbook_checkpoint_matches(checkpoint: dict[str, Any] | None, source_hash: str) -> bool:
+    if not checkpoint:
+        return False
+    if checkpoint.get("status") != "completed":
+        return False
+    if checkpoint.get("processing_engine") != ORDERBOOK_STREAM_ENGINE:
+        return False
+    if checkpoint.get("source_file_hash") != source_hash:
+        return False
+    feature = ((checkpoint.get("output_paths") or {}).get("feature_parquet"))
+    return bool(feature and Path(feature).exists())
+
+
+def run_orderbook_stream_features(
+    root: Path,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    market: str | None = None,
+    instrument: str | None = None,
+    max_files: int | None = None,
+    resume: bool = True,
+) -> dict[str, Any]:
+    """Run Orderbook governance as streaming archive read -> 1m Parquet features + checkpoint.
+
+    This path intentionally does not materialize full L2 normalized event files. It
+    streams raw .data/.tar archives, maintains only the current book state, writes
+    compact 1m feature Parquet, and resumes at source-file checkpoint granularity.
+    """
+    files = select_orderbook_source_files(root, start_date=start_date, end_date=end_date, market=market, instrument=instrument, max_files=max_files)
+    summary: dict[str, Any] = {
+        "dataset_type": "orderbook_feature",
+        "mode": "stream_parquet_checkpoint",
+        "source_file_count": len(files),
+        "start_date": start_date,
+        "end_date": end_date,
+        "market": market,
+        "instrument": instrument,
+        "max_files": max_files,
+        "resume": resume,
+        "processing_engine": ORDERBOOK_STREAM_ENGINE,
+        "processed_count": 0,
+        "skipped_count": 0,
+        "error_count": 0,
+        "total_feature_rows_1m": 0,
+        "crossed_book_count": 0,
+        "update_without_snapshot_count": 0,
+        "outputs": [],
+    }
+    for path in files:
+        source_hash = sha256_file(path)
+        source_date = source_file_date_from_name(path.name) or "unknown"
+        selected_market = infer_source_market_type(path)
+        selected_instrument = instrument or path.name.split("-L2orderbook", 1)[0]
+        feature_path = orderbook_feature_parquet_path(root, selected_market, selected_instrument, source_date)
+        checkpoint_path = checkpoint_path_for_orderbook(root, selected_market, selected_instrument, source_date)
+        checkpoint = read_json_if_exists(checkpoint_path)
+        if resume and completed_orderbook_checkpoint_matches(checkpoint, source_hash):
+            summary["skipped_count"] += 1
+            summary["outputs"].append({
+                "source": str(path),
+                "status": "skipped_completed",
+                "source_file_hash": source_hash,
+                "checkpoint": str(checkpoint_path),
+                "feature_parquet": str(feature_path),
+                "feature_rows_1m": int(checkpoint.get("feature_rows_1m", 0)),
+            })
+            continue
+
+        manifest, quality, features = process_orderbook_minute_feature_file(path, root)
+        if manifest.get("parse_status") != "success":
+            summary["error_count"] += 1
+            failed = {
+                "status": "error",
+                "source_file_path": str(path),
+                "source_file_name": path.name,
+                "source_file_hash": source_hash,
+                "source_file_size": path.stat().st_size,
+                "source_file_date": source_date,
+                "market": selected_market,
+                "instrument": selected_instrument,
+                "parse_error_message": manifest.get("parse_error_message"),
+                "processing_engine": ORDERBOOK_STREAM_ENGINE,
+            }
+            write_json(checkpoint_path, failed)
+            summary["outputs"].append({"source": str(path), "status": "error", "checkpoint": str(checkpoint_path), "source_file_hash": source_hash})
+            continue
+
+        if features:
+            write_parquet_rows(feature_path, features)
+        manifest_base = root / "manifests" / "exchange=okx" / "dataset_type=orderbook_feature" / f"market={selected_market}" / f"instrument={selected_instrument}" / f"exchange_date_utc8={source_date}"
+        quality_base = root / "reports" / "quality" / "exchange=okx" / "dataset_type=orderbook_feature" / f"market={selected_market}" / f"instrument={selected_instrument}" / f"exchange_date_utc8={source_date}"
+        write_json(manifest_base / "file_manifest.json", manifest)
+        write_json(quality_base / "quality_report.json", quality)
+        checkpoint_doc = {
+            "status": "completed",
+            "source_file_path": str(path),
+            "source_file_name": path.name,
+            "source_file_hash": source_hash,
+            "source_file_size": path.stat().st_size,
+            "source_file_date": source_date,
+            "market": selected_market,
+            "instrument": selected_instrument,
+            "feature_rows_1m": len(features),
+            "row_count_observed": int(quality.get("row_count_observed") or 0),
+            "snapshot_count": int(quality.get("snapshot_count") or 0),
+            "update_count": int(quality.get("update_count") or 0),
+            "update_without_snapshot_count": int(quality.get("update_without_snapshot_count") or 0),
+            "crossed_book_count": int(quality.get("crossed_book_count") or 0),
+            "first_event_time_ms": quality.get("min_ts_ms"),
+            "last_event_time_ms": quality.get("max_ts_ms"),
+            "book_reconstruction_quality": quality.get("book_reconstruction_quality"),
+            "sequence_checksum_available": bool(quality.get("sequence_checksum_available")),
+            "output_paths": {
+                "feature_parquet": str(feature_path),
+                "manifest": str(manifest_base / "file_manifest.json"),
+                "quality_report": str(quality_base / "quality_report.json"),
+            },
+            "feature_parquet_sha256": sha256_file(feature_path) if feature_path.exists() else None,
+            "schema_version": GovernanceVersions().schema_version,
+            "feature_version": GovernanceVersions().feature_version,
+            "governance_version": GovernanceVersions().governance_version,
+            "processing_engine": ORDERBOOK_STREAM_ENGINE,
+        }
+        write_json(checkpoint_path, checkpoint_doc)
+        summary["processed_count"] += 1
+        summary["total_feature_rows_1m"] += len(features)
+        summary["crossed_book_count"] += int(quality.get("crossed_book_count") or 0)
+        summary["update_without_snapshot_count"] += int(quality.get("update_without_snapshot_count") or 0)
+        summary["outputs"].append({
+            "source": str(path),
+            "status": "processed",
+            "source_file_hash": source_hash,
+            "checkpoint": str(checkpoint_path),
+            "manifest": str(manifest_base / "file_manifest.json"),
+            "quality_report": str(quality_base / "quality_report.json"),
+            "feature_parquet": str(feature_path),
+            "feature_rows_1m": len(features),
+            "book_reconstruction_quality": quality.get("book_reconstruction_quality"),
+        })
+    summary_path = root / "reports" / "quality" / "orderbook_stream_features_summary.json"
+    write_json(summary_path, summary)
+    summary["summary_path"] = str(summary_path)
+    return summary
 
 
 def run_orderbook_minute_features(root: Path, start_date: str | None = None, end_date: str | None = None, market: str | None = None, instrument: str | None = None, max_files: int | None = None) -> dict[str, Any]:
