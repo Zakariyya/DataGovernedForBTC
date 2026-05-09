@@ -393,4 +393,58 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-window -
 - `confirm=0` 历史归档语义通过显式 policy/flag 记录，不覆盖原始字段，不伪装成官方 `confirm=1`。
 - Orderbook 原始归档存在不等于 L2 特征可用；当前 curated 明确不包含 Orderbook 特征。
 - AlphaTenant 后续只能消费治理后的 feature/snapshot，不得直接读取 raw tick/L2/CSV。
+## 里程碑 11：目标窗口 Orderbook 1m 特征与 curated 对齐
+
+完成时间：2026-05-09
+
+### ✅ 已完成
+
+- 按 TDD 新增 Orderbook 归档解析与 1m 特征测试：
+  - 支持 `.data`、`.tar.gz`、`.tar.tar`；`.tar.tar` 可能实际是 gzip tar，读取时使用自动探测。
+  - 从同文件内 snapshot 起，best-effort 应用 update，按 1m 窗口输出最后盘口状态。
+  - 不把 raw L2 直接交给 AlphaTenant；输出为治理后的 `orderbook_feature`。
+- 新增 CLI：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli orderbook-minute-features --start-date 2024-05-20 --end-date 2024-06-11 --market spot --instrument BTC-USDT
+```
+
+- `curated-state-window` 已自动读取同窗口 Spot BTC-USDT `orderbook_feature/interval=1m`，并要求 Orderbook feature 与当前 1m `feature_time_ms` 精确匹配。
+- 对 Orderbook 缺失、非当前分钟、crossed book 做显式 quality flags。
+- 保留质量边界：当前无 sequence/checksum 字段，盘口重建质量标记为 `best_effort_reconstructed_without_sequence_checksum`，不是可证明连续的 L2 reconstruction。
+
+### 📊 目标窗口真实验证结果
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli orderbook-minute-features --start-date 2024-05-20 --end-date 2024-06-11 --market spot --instrument BTC-USDT
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-window --start-date 2024-05-20 --end-date 2024-06-11 --label target_2024-05-20_to_2024-06-11_with_orderbook
+```
+
+Orderbook 结果：
+
+- Spot BTC-USDT Orderbook 原始归档：23 天。
+- 成功解析：23。
+- 失败：0。
+- 1m Orderbook feature rows：32,955。
+- 输出路径：`data_lake/features/exchange=okx/dataset_type=orderbook_feature/market=spot/instrument=BTC-USDT/interval=1m/.../orderbook_features_1m.csv`。
+
+Curated with Orderbook 结果：
+
+- 输出：`data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=1m/sample=target_2024-05-20_to_2024-06-11_with_orderbook/curated_btc_market_state_1m.csv`。
+- rows：33,120。
+- candle/funding/borrowing/trade/orderbook 文件数：23 / 23 / 23 / 23 / 23。
+- `future_leak_violation_count`：0。
+- `allow_into_feature_layer=True`：32,404 / 33,120，比例 0.9783816425。
+- `missing_or_stale_source_count` 分布：`0: 32404`, `1: 716`。
+- `data_quality_flags`：`orderbook_feature_missing: 649`, `orderbook_crossed_book: 67`。
+
+### 🔍 异常解释
+
+- `orderbook_feature_missing` 主要集中在窗口开头：Candlestick 的 `2024-05-20` UTC+8 日从 UTC `2024-05-19 16:01` 开始，而本地没有 `2024-05-19` Spot BTC-USDT Orderbook 原始文件可补。该缺口不能伪造，只能显式标记。
+- `orderbook_crossed_book` 只出现在少数分钟，来自 best-effort update 重建后出现的 crossed book 状态；由于原始数据没有 sequence/checksum，不能证明连续性，因此这些分钟被质量闸门阻断。
+
+### 🔒 边界
+
+- 当前已满足 AlphaTenant 需要“治理后的 Orderbook 1m 特征”的最低闭环：解析、质量报告、分钟聚合、时间对齐、curated quality gate。
+- 但这仍不是严格可证明的全深度 L2 重建。后续若要提升等级，需要独立补充 sequence/checksum 或交易所官方可验证连续性机制，否则必须保留 `best_effort_reconstructed_without_sequence_checksum` 标签。
 

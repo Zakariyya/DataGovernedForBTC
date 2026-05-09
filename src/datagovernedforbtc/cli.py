@@ -30,6 +30,12 @@ def build_parser() -> argparse.ArgumentParser:
     ob_parser = sub.add_parser("orderbook-audit", help="Run safe Orderbook JSONL audit without full L2 reconstruction.")
     ob_parser.add_argument("--max-lines", type=int, default=5000, help="Maximum JSONL rows per orderbook file to inspect.")
     ob_parser.add_argument("--max-files", type=int, default=None, help="Optional safety limit for processing the first N orderbook files.")
+    ob_feat_parser = sub.add_parser("orderbook-minute-features", help="Build best-effort 1m Orderbook features from .data/.tar archives with quality labels.")
+    ob_feat_parser.add_argument("--start-date", default=None, help="Inclusive source file date filter, YYYY-MM-DD.")
+    ob_feat_parser.add_argument("--end-date", default=None, help="Inclusive source file date filter, YYYY-MM-DD.")
+    ob_feat_parser.add_argument("--market", default=None, choices=["spot", "perpetual"], help="Optional source market filter.")
+    ob_feat_parser.add_argument("--instrument", default=None, help="Optional instrument filename prefix filter, e.g. BTC-USDT.")
+    ob_feat_parser.add_argument("--max-files", type=int, default=None, help="Optional safety limit after date-range filtering.")
     cur_parser = sub.add_parser("curated-state-minimal", help="Build minimal curated_btc_market_state_1m sample with time-causal as-of joins.")
     cur_parser.add_argument("--max-candle-files", type=int, default=1, help="Number of normalized candle files to use.")
     cur_parser.add_argument("--max-trade-files", type=int, default=1, help="Number of trade feature files to use.")
@@ -83,6 +89,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "orderbook-audit":
         from datagovernedforbtc.orderbook import run_orderbook_audit
         print(json.dumps(run_orderbook_audit(root, max_lines=args.max_lines, max_files=args.max_files), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "orderbook-minute-features":
+        from datagovernedforbtc.orderbook import run_orderbook_minute_features
+        print(json.dumps(run_orderbook_minute_features(root, start_date=args.start_date, end_date=args.end_date, market=args.market, instrument=args.instrument, max_files=args.max_files), ensure_ascii=False, indent=2))
         return 0
     if args.command == "curated-state-minimal":
         from datagovernedforbtc.curated_state import run_curated_state_minimal

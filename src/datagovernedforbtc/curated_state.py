@@ -12,6 +12,7 @@ from .time_semantics import ms_to_utc_iso
 
 MAX_FUNDING_AGE_MS = 24 * 60 * 60 * 1000
 MAX_BORROW_AGE_MS = 24 * 60 * 60 * 1000
+MAX_ORDERBOOK_AGE_MS = 0
 
 
 def read_csv_dicts(path: Path) -> list[dict[str, Any]]:
@@ -64,6 +65,17 @@ def finalize_quality_gate(row: dict[str, Any]) -> None:
         if trade_age != 0:
             flags.append("trade_feature_not_current_1m")
 
+    if row.get("orderbook_feature_required") is True or str(row.get("orderbook_feature_required")) == "True":
+        if row.get("orderbook_feature_missing_reason"):
+            flags.append("orderbook_feature_missing")
+        else:
+            orderbook_feature_time = as_int(row.get("orderbook_feature_time_ms"), feature_time)
+            orderbook_age = feature_time - orderbook_feature_time
+            if orderbook_age != 0:
+                flags.append("orderbook_feature_not_current_1m")
+            if str(row.get("orderbook_is_crossed_book_last", "false")).lower() == "true":
+                flags.append("orderbook_crossed_book")
+
     row["future_leak_violation_count"] = future_leak_violation_count
     row["data_quality_flags"] = ";".join(flags)
     row["missing_or_stale_source_count"] = len(flags)
@@ -76,6 +88,7 @@ def build_curated_market_state_1m(
     funding_rows: list[dict[str, Any]] | None = None,
     borrowing_rows: list[dict[str, Any]] | None = None,
     trade_feature_rows: list[dict[str, Any]] | None = None,
+    orderbook_feature_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build a minimal time-causal BTC 1m market state table.
 
@@ -87,6 +100,8 @@ def build_curated_market_state_1m(
     funding_rows = sorted(funding_rows, key=lambda r: as_int(r.get("available_time_ms"), -1))
     borrowing_rows = sorted(borrowing_rows or [], key=lambda r: (str(r.get("currency_name", "")), as_int(r.get("available_time_ms"), -1)))
     trade_feature_rows = sorted(trade_feature_rows or [], key=lambda r: as_int(r.get("available_time_ms"), -1))
+    orderbook_required = orderbook_feature_rows is not None
+    orderbook_feature_rows = sorted(orderbook_feature_rows or [], key=lambda r: as_int(r.get("available_time_ms"), -1))
     candles_sorted = sorted(candles, key=lambda r: as_int(r.get("available_time_ms") or r.get("close_time_ms"), -1))
 
     borrow_by_currency: dict[str, list[dict[str, Any]]] = {}
@@ -98,6 +113,7 @@ def build_curated_market_state_1m(
         feature_time = as_int(candle.get("close_time_ms") or candle.get("available_time_ms"))
         funding = asof_row(funding_rows, feature_time)
         trade = asof_row(trade_feature_rows, feature_time)
+        orderbook = asof_row(orderbook_feature_rows, feature_time)
         row: dict[str, Any] = {
             "exchange": candle.get("exchange", "okx"),
             "instrument_name": candle.get("instrument_name", "BTC-USDT"),
@@ -132,7 +148,20 @@ def build_curated_market_state_1m(
             "trade_feature_missing_reason": "",
             "trade_feature_time_ms": "",
             "trade_quality_score": "",
-            "orderbook_feature_missing_reason": "not_included_in_current_window",
+            "orderbook_feature_required": orderbook_required,
+            "orderbook_best_bid_last": "",
+            "orderbook_best_ask_last": "",
+            "orderbook_mid_price_last": "",
+            "orderbook_spread_abs_last": "",
+            "orderbook_spread_pct_last": "",
+            "orderbook_top20_depth_imbalance_last": "",
+            "orderbook_update_count_1m": "",
+            "orderbook_snapshot_count_1m": "",
+            "orderbook_feature_time_ms": "",
+            "orderbook_quality_score": "",
+            "orderbook_book_reconstruction_quality": "",
+            "orderbook_is_crossed_book_last": "",
+            "orderbook_feature_missing_reason": "" if orderbook_required else "not_included_in_current_window",
             "future_leak_violation_count": 0,
             "data_quality_flags": "",
             "missing_or_stale_source_count": 0,
@@ -169,6 +198,25 @@ def build_curated_market_state_1m(
             })
         else:
             row["trade_feature_missing_reason"] = "no_current_trade_feature"
+        if orderbook_required:
+            if orderbook is not None and as_int(orderbook.get("feature_time_ms") or orderbook.get("available_time_ms"), -1) == feature_time:
+                row.update({
+                    "orderbook_best_bid_last": orderbook.get("best_bid_last", ""),
+                    "orderbook_best_ask_last": orderbook.get("best_ask_last", ""),
+                    "orderbook_mid_price_last": orderbook.get("mid_price_last", ""),
+                    "orderbook_spread_abs_last": orderbook.get("spread_abs_last", ""),
+                    "orderbook_spread_pct_last": orderbook.get("spread_pct_last", ""),
+                    "orderbook_top20_depth_imbalance_last": orderbook.get("top20_depth_imbalance_last", ""),
+                    "orderbook_update_count_1m": orderbook.get("orderbook_update_count_1m", ""),
+                    "orderbook_snapshot_count_1m": orderbook.get("orderbook_snapshot_count_1m", ""),
+                    "orderbook_feature_time_ms": orderbook.get("feature_time_ms") or orderbook.get("available_time_ms", ""),
+                    "orderbook_quality_score": orderbook.get("orderbook_quality_score", ""),
+                    "orderbook_book_reconstruction_quality": orderbook.get("book_reconstruction_quality", ""),
+                    "orderbook_is_crossed_book_last": orderbook.get("is_crossed_book_last", ""),
+                    "orderbook_feature_missing_reason": "",
+                })
+            else:
+                row["orderbook_feature_missing_reason"] = "no_current_orderbook_feature"
         finalize_quality_gate(row)
         output.append(row)
     return output
@@ -227,11 +275,17 @@ def run_curated_state_window(root: Path, start_date: str, end_date: str, label: 
         start_date,
         end_date,
     )
+    orderbook_paths = filter_paths_by_date(
+        list((root / "data_lake" / "features" / "exchange=okx" / "dataset_type=orderbook_feature" / "market=spot" / "instrument=BTC-USDT" / "interval=1m").rglob("orderbook_features_1m.csv")),
+        start_date,
+        end_date,
+    )
     candles = load_csvs(candle_paths)
     funding = load_csvs(funding_paths)
     borrowing = load_csvs(borrowing_paths)
     trades = load_csvs(trade_paths)
-    rows = build_curated_market_state_1m(candles, funding, borrowing, trades)
+    orderbooks = load_csvs(orderbook_paths)
+    rows = build_curated_market_state_1m(candles, funding, borrowing, trades, orderbook_feature_rows=orderbooks if orderbook_paths else None)
     out_dir = root / "data_lake" / "features" / "exchange=okx" / "dataset_type=curated_btc_market_state" / "interval=1m" / f"sample={label}"
     out_path = out_dir / "curated_btc_market_state_1m.csv"
     if rows:
@@ -259,6 +313,7 @@ def run_curated_state_window(root: Path, start_date: str, end_date: str, label: 
         "funding_files_used": len(funding_paths),
         "borrowing_files_used": len(borrowing_paths),
         "trade_feature_files_used": len(trade_paths),
+        "orderbook_feature_files_used": len(orderbook_paths),
         "row_count": len(rows),
         "allow_into_feature_layer_rows": allow_count,
         "allow_into_feature_layer_ratio": (allow_count / len(rows)) if rows else 0,
@@ -267,7 +322,7 @@ def run_curated_state_window(root: Path, start_date: str, end_date: str, label: 
         "data_quality_flag_counts": flags,
         "orderbook_feature_missing_rows": orderbook_missing_count,
         "output": str(out_path) if rows else None,
-        "asof_rule": "join only rows with available_time_ms <= feature_time_ms; trade feature must match current 1m feature_time_ms",
+        "asof_rule": "join only rows with available_time_ms <= feature_time_ms; trade and orderbook features must match current 1m feature_time_ms",
     }
     summary_path = root / "reports" / "quality" / f"curated_state_window_{label}_summary.json"
     write_json(summary_path, summary)
@@ -302,7 +357,7 @@ def run_curated_state_minimal(root: Path, max_candle_files: int = 1, max_trade_f
         "trade_feature_files_used": len(selected_trade_paths),
         "row_count": len(rows),
         "output": str(out_path) if rows else None,
-        "asof_rule": "join only rows with available_time_ms <= feature_time_ms; trade feature must match current 1m feature_time_ms",
+        "asof_rule": "join only rows with available_time_ms <= feature_time_ms; trade and orderbook features must match current 1m feature_time_ms",
     }
     summary_path = root / "reports" / "quality" / "curated_state_minimal_summary.json"
     write_json(summary_path, summary)
