@@ -132,6 +132,7 @@ def build_curated_market_state_1m(
             "trade_feature_missing_reason": "",
             "trade_feature_time_ms": "",
             "trade_quality_score": "",
+            "orderbook_feature_missing_reason": "not_included_in_current_window",
             "future_leak_violation_count": 0,
             "data_quality_flags": "",
             "missing_or_stale_source_count": 0,
@@ -183,6 +184,95 @@ def load_csvs(paths: list[Path]) -> list[dict[str, Any]]:
 def write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def source_date_from_partition(path: Path) -> str | None:
+    for part in path.parts:
+        if part.startswith("exchange_date_utc8="):
+            return part.split("=", 1)[1]
+    return None
+
+
+def filter_paths_by_date(paths: list[Path], start_date: str | None, end_date: str | None) -> list[Path]:
+    selected: list[Path] = []
+    for path in sorted(paths):
+        source_date = source_date_from_partition(path)
+        if start_date is not None and (source_date is None or source_date < start_date):
+            continue
+        if end_date is not None and (source_date is None or source_date > end_date):
+            continue
+        selected.append(path)
+    return selected
+
+
+def run_curated_state_window(root: Path, start_date: str, end_date: str, label: str | None = None) -> dict[str, Any]:
+    label = label or f"{start_date}_to_{end_date}"
+    candle_paths = filter_paths_by_date(
+        list((root / "data_lake" / "normalized" / "exchange=okx" / "dataset_type=candlestick" / "market=spot" / "instrument=BTC-USDT" / "interval=1m").rglob("candlestick_normalized.csv")),
+        start_date,
+        end_date,
+    )
+    funding_paths = filter_paths_by_date(
+        list((root / "data_lake" / "normalized" / "exchange=okx" / "dataset_type=funding_rate" / "market=perpetual").rglob("funding_normalized.csv")),
+        start_date,
+        end_date,
+    )
+    borrowing_paths = filter_paths_by_date(
+        list((root / "data_lake" / "normalized" / "exchange=okx" / "dataset_type=borrowing_rate" / "market=spot").rglob("borrowing_normalized.csv")),
+        start_date,
+        end_date,
+    )
+    trade_paths = filter_paths_by_date(
+        list((root / "data_lake" / "features" / "exchange=okx" / "dataset_type=trade_feature" / "market=spot" / "instrument=BTC-USDT" / "interval=1m").rglob("trade_features_1m.csv")),
+        start_date,
+        end_date,
+    )
+    candles = load_csvs(candle_paths)
+    funding = load_csvs(funding_paths)
+    borrowing = load_csvs(borrowing_paths)
+    trades = load_csvs(trade_paths)
+    rows = build_curated_market_state_1m(candles, funding, borrowing, trades)
+    out_dir = root / "data_lake" / "features" / "exchange=okx" / "dataset_type=curated_btc_market_state" / "interval=1m" / f"sample={label}"
+    out_path = out_dir / "curated_btc_market_state_1m.csv"
+    if rows:
+        write_csv_rows(out_path, rows, list(rows[0].keys()))
+
+    allow_count = sum(1 for r in rows if r.get("allow_into_feature_layer") is True or str(r.get("allow_into_feature_layer")) == "True")
+    future_leak_count = sum(as_int(r.get("future_leak_violation_count"), 0) for r in rows)
+    flags: dict[str, int] = {}
+    missing_counts: dict[str, int] = {}
+    orderbook_missing_count = 0
+    for row in rows:
+        if row.get("orderbook_feature_missing_reason"):
+            orderbook_missing_count += 1
+        m = str(row.get("missing_or_stale_source_count", "0"))
+        missing_counts[m] = missing_counts.get(m, 0) + 1
+        for flag in str(row.get("data_quality_flags", "")).split(";"):
+            if flag:
+                flags[flag] = flags.get(flag, 0) + 1
+    summary = {
+        "dataset_type": "curated_btc_market_state_1m",
+        "window_start": start_date,
+        "window_end": end_date,
+        "label": label,
+        "candle_files_used": len(candle_paths),
+        "funding_files_used": len(funding_paths),
+        "borrowing_files_used": len(borrowing_paths),
+        "trade_feature_files_used": len(trade_paths),
+        "row_count": len(rows),
+        "allow_into_feature_layer_rows": allow_count,
+        "allow_into_feature_layer_ratio": (allow_count / len(rows)) if rows else 0,
+        "future_leak_violation_count": future_leak_count,
+        "missing_or_stale_source_count_distribution": missing_counts,
+        "data_quality_flag_counts": flags,
+        "orderbook_feature_missing_rows": orderbook_missing_count,
+        "output": str(out_path) if rows else None,
+        "asof_rule": "join only rows with available_time_ms <= feature_time_ms; trade feature must match current 1m feature_time_ms",
+    }
+    summary_path = root / "reports" / "quality" / f"curated_state_window_{label}_summary.json"
+    write_json(summary_path, summary)
+    summary["summary_path"] = str(summary_path)
+    return summary
 
 
 def run_curated_state_minimal(root: Path, max_candle_files: int = 1, max_trade_files: int = 1) -> dict[str, Any]:

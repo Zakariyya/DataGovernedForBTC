@@ -345,3 +345,52 @@ Orderbook 最新统计：
 - `.tar.tar` 被识别为 OKX Raw Orderbook coverage，不代表 L2 已完成重建。
 - Lightweight scan 不展开归档、不验证归档内部连续性、不生成可训练 Orderbook feature。
 - 后续若要利用归档，需另建“安全解包 / 抽样审计 / 质量标签”入口，仍不得直接向 AlphaTenant 暴露 raw L2。
+
+## 里程碑 10：2024-05-20 ~ 2024-06-11 目标窗口治理跑通（不训练）
+
+完成时间：2026-05-09
+
+### ✅ 已完成
+
+- 按 TDD 增加 Candlestick 历史归档 `confirm=0` 语义测试，先观察 RED，再实现 GREEN。
+- 保留 OKX API 官方语义：`confirm=0` 表示 API 当前 K 线未完成，`confirm=1` 表示完成。
+- 针对本地 OKX 历史归档的特殊形态新增显式治理策略：当日文件完整 1440 行、无 gap、无重复 open_time、无 OHLC/负成交量异常、且全量 `confirm=0` 时，标记为 `source_archive_confirm_policy=historical_archive_confirm_0_closed_bar_by_complete_daily_file`。
+- 不把 `confirm=0` 静默改成 `confirm=1`；normalized 中仍保留原始 `confirm=0`，并增加 `data_quality_flags=source_archive_confirm_0_closed_bar_inferred`。
+- `allow_into_training` 由“时间完整 + 历史归档语义确认 + 无 gap + 无 OHLC/成交量异常”共同决定；本次仍不启动训练，仅用于跑通治理链路。
+- `trade-minimal` 新增 `--start-date/--end-date/--market/--instrument`，按日期窗口、市场与品种过滤，避免误处理不相关年份/市场。
+- 新增 `curated-state-window`，按目标窗口生成 `curated_btc_market_state_1m`，主时间轴为 Spot BTC-USDT 1m candle，Funding/Borrowing as-of join，Trade 1m feature 精确匹配。
+- 当前窗口暂不纳入 Orderbook，行级字段显式记录 `orderbook_feature_missing_reason=not_included_in_current_window`。
+
+### 📊 目标窗口真实验证结果
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli candlestick-minimal
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli trade-minimal --start-date 2024-05-20 --end-date 2024-06-11 --market spot --instrument BTC-USDT
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-window --start-date 2024-05-20 --end-date 2024-06-11 --label target_2024-05-20_to_2024-06-11
+```
+
+- Candlestick Spot BTC-USDT 目标窗口：23 天全部存在 quality report。
+- Candlestick normalized：33,120 行。
+- Candlestick policy：23 天均为 `historical_archive_confirm_0_closed_bar_by_complete_daily_file`。
+- Candlestick quality flag：23 天均为 `source_archive_confirm_0_closed_bar_inferred`。
+- Trade Spot BTC-USDT：23 天全部处理完成。
+- Trade normalized tick：7,137,407 行。
+- Trade 1m feature：33,120 行。
+- Trade duplicate_trade_id：0。
+- Funding normalized 文件：23。
+- Borrowing normalized 文件：23。
+- Curated output：`data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=1m/sample=target_2024-05-20_to_2024-06-11/curated_btc_market_state_1m.csv`。
+- Curated rows：33,120。
+- `future_leak_violation_count` 总和：0。
+- `allow_into_feature_layer=True`：33,120 / 33,120，比例 1.0。
+- `missing_or_stale_source_count` 分布：`0: 33120`。
+- `data_quality_flags`：空分布（无异常 flag）。
+- `orderbook_feature_missing_rows`：33,120，原因均为当前窗口显式未纳入 Orderbook。
+
+### 🔒 边界说明
+
+- 本里程碑是治理链路跑通，不是训练准入、不是策略研究、不是回测结论。
+- `confirm=0` 历史归档语义通过显式 policy/flag 记录，不覆盖原始字段，不伪装成官方 `confirm=1`。
+- Orderbook 原始归档存在不等于 L2 特征可用；当前 curated 明确不包含 Orderbook 特征。
+- AlphaTenant 后续只能消费治理后的 feature/snapshot，不得直接读取 raw tick/L2/CSV。
+

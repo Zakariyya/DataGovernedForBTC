@@ -22,6 +22,33 @@ def source_file_date_from_name(name: str) -> str | None:
     return m.group(1) if m else None
 
 
+def select_trade_source_files(
+    root: Path,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    max_files: int | None = None,
+    market: str | None = None,
+    instrument: str | None = None,
+) -> list[Path]:
+    """Select raw Trade CSV files by inclusive source-file date before max_files limiting."""
+    source_dir = root / "okx" / "Trade"
+    all_files = sorted([p for p in source_dir.rglob("*.csv") if p.is_file()])
+    selected: list[Path] = []
+    market_norm = market.lower() if market else None
+    for path in all_files:
+        source_date = source_file_date_from_name(path.name)
+        if market_norm is not None and infer_source_market_type(path) != market_norm:
+            continue
+        if instrument is not None and not path.name.startswith(f"{instrument}-trades-"):
+            continue
+        if start_date is not None and (source_date is None or source_date < start_date):
+            continue
+        if end_date is not None and (source_date is None or source_date > end_date):
+            continue
+        selected.append(path)
+    return selected[:max_files] if max_files is not None else selected
+
+
 def write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -287,11 +314,11 @@ def aggregate_trade_1m(normalized_rows: list[dict[str, Any]]) -> list[dict[str, 
     return features
 
 
-def run_trade_minimal(root: Path, max_files: int | None = None) -> dict[str, Any]:
+def run_trade_minimal(root: Path, max_files: int | None = None, start_date: str | None = None, end_date: str | None = None, market: str | None = None, instrument: str | None = None) -> dict[str, Any]:
     source_dir = root / "okx" / "Trade"
     all_files = sorted([p for p in source_dir.rglob("*.csv") if p.is_file()])
-    files = all_files[:max_files] if max_files is not None else all_files
-    summary: dict[str, Any] = {"dataset_type": "trade", "source_file_count": len(files), "total_discovered_source_file_count": len(all_files), "max_files": max_files, "success_count": 0, "error_count": 0, "outputs": []}
+    files = select_trade_source_files(root, start_date=start_date, end_date=end_date, max_files=max_files, market=market, instrument=instrument)
+    summary: dict[str, Any] = {"dataset_type": "trade", "source_file_count": len(files), "total_discovered_source_file_count": len(all_files), "start_date": start_date, "end_date": end_date, "market": market, "instrument": instrument, "max_files": max_files, "success_count": 0, "error_count": 0, "outputs": []}
     total_normalized = 0
     total_feature_rows = 0
     duplicate_count = 0

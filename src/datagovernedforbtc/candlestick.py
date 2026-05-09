@@ -34,6 +34,8 @@ class CandlestickQuality:
     confirm_1_count: int
     confirm_0_count: int
     confirm_1_ratio: float | None
+    source_archive_confirm_policy: str
+    data_quality_flags: str
     missing_columns: list[str]
     extra_columns: list[str]
     duplicate_open_time_count: int
@@ -85,6 +87,7 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
         if missing_columns:
             raise ValueError(f"missing columns: {missing_columns}")
         normalized: list[dict[str, Any]] = []
+        normalized_candidates: list[dict[str, Any]] = []
         open_times: list[int] = []
         confirm_1 = 0
         confirm_0 = 0
@@ -114,38 +117,37 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
             for volume_value in (vol, vol_ccy, vol_quote):
                 if volume_value is not None and volume_value < 0:
                     neg_vol += 1
-            if confirm == 1:
-                normalized.append({
-                    "exchange": "okx",
-                    "dataset_type": "candlestick",
-                    "instrument_name": inst,
-                    "instrument_type": infer_instrument_type_from_path(inst, path),
-                    "source_market_type": source_market_type,
-                    "bar_interval": "1m",
-                    "event_time_ms": close_ms,
-                    "event_time_utc": ms_to_utc_iso(close_ms),
-                    "open_time_ms": ot,
-                    "open_time_utc": ms_to_utc_iso(ot),
-                    "close_time_ms": close_ms,
-                    "close_time_utc": ms_to_utc_iso(close_ms),
-                    "available_time_ms": close_ms,
-                    "available_time_utc": ms_to_utc_iso(close_ms),
-                    "exchange_date_utc8": exchange_date_utc8_from_ms(ot),
-                    "source_file_date": source_file_date,
-                    "open": r["open"], "high": r["high"], "low": r["low"], "close": r["close"],
-                    "vol_base": r["vol"],
-                    "vol_ccy": r["vol_ccy"],
-                    "vol_quote": r["vol_quote"],
-                    "confirm": confirm,
-                    "source_file_name": path.name,
-                    "source_file_hash": file_hash,
-                    "schema_version": versions.schema_version,
-                    "governance_version": versions.governance_version,
-                    "data_quality_score": "1.0",
-                    "is_filled": "false",
-                    "fill_method": "none",
-                    "missing_reason": "none",
-                })
+            normalized_candidates.append({
+                "exchange": "okx",
+                "dataset_type": "candlestick",
+                "instrument_name": inst,
+                "instrument_type": infer_instrument_type_from_path(inst, path),
+                "source_market_type": source_market_type,
+                "bar_interval": "1m",
+                "event_time_ms": close_ms,
+                "event_time_utc": ms_to_utc_iso(close_ms),
+                "open_time_ms": ot,
+                "open_time_utc": ms_to_utc_iso(ot),
+                "close_time_ms": close_ms,
+                "close_time_utc": ms_to_utc_iso(close_ms),
+                "available_time_ms": close_ms,
+                "available_time_utc": ms_to_utc_iso(close_ms),
+                "exchange_date_utc8": exchange_date_utc8_from_ms(ot),
+                "source_file_date": source_file_date,
+                "open": r["open"], "high": r["high"], "low": r["low"], "close": r["close"],
+                "vol_base": r["vol"],
+                "vol_ccy": r["vol_ccy"],
+                "vol_quote": r["vol_quote"],
+                "confirm": confirm,
+                "source_file_name": path.name,
+                "source_file_hash": file_hash,
+                "schema_version": versions.schema_version,
+                "governance_version": versions.governance_version,
+                "data_quality_score": "1.0",
+                "is_filled": "false",
+                "fill_method": "none",
+                "missing_reason": "none",
+            })
         sorted_times = sorted(open_times)
         duplicates = len(open_times) - len(set(open_times))
         out_of_order = sum(1 for a, b in zip(open_times, open_times[1:]) if b < a)
@@ -158,7 +160,41 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
         min_ms = min(open_times) if open_times else None
         max_ms = max(open_times) if open_times else None
         inst_name = sorted(instruments)[0] if instruments else None
-        allow = bool(row_count == 1440 and confirm_0 == 0 and not gaps and duplicates == 0 and ohlc_invalid == 0 and neg_vol == 0)
+        base_integrity_ok = bool(row_count == 1440 and not gaps and duplicates == 0 and ohlc_invalid == 0 and neg_vol == 0)
+        quality_flags: list[str] = []
+        if confirm_0 == 0:
+            source_archive_confirm_policy = "strict_confirm_1"
+        elif confirm_1 == 0 and base_integrity_ok:
+            source_archive_confirm_policy = "historical_archive_confirm_0_closed_bar_by_complete_daily_file"
+            quality_flags.append("source_archive_confirm_0_closed_bar_inferred")
+        elif confirm_1 == 0:
+            source_archive_confirm_policy = "unresolved_confirm_0"
+            quality_flags.append("confirm_0_unresolved")
+        else:
+            source_archive_confirm_policy = "mixed_confirm_values_unresolved"
+            quality_flags.append("mixed_confirm_values")
+        if row_count != 1440:
+            quality_flags.append("row_count_not_1440")
+        if gaps:
+            quality_flags.append("time_gap_detected")
+        if duplicates:
+            quality_flags.append("duplicate_open_time_detected")
+        if ohlc_invalid:
+            quality_flags.append("ohlc_invalid_detected")
+        if neg_vol:
+            quality_flags.append("negative_volume_detected")
+        confirm_semantics_ok = source_archive_confirm_policy in {
+            "strict_confirm_1",
+            "historical_archive_confirm_0_closed_bar_by_complete_daily_file",
+        }
+        allow = bool(base_integrity_ok and confirm_semantics_ok)
+        if allow:
+            for candidate in normalized_candidates:
+                candidate["source_archive_confirm_policy"] = source_archive_confirm_policy
+                candidate["data_quality_flags"] = ";".join(quality_flags)
+                if source_archive_confirm_policy != "strict_confirm_1":
+                    candidate["data_quality_score"] = "0.98"
+            normalized = normalized_candidates
         penalties = 0
         penalties += 20 if row_count != 1440 else 0
         penalties += min(20, confirm_0)
@@ -183,6 +219,8 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
             confirm_1_count=confirm_1,
             confirm_0_count=confirm_0,
             confirm_1_ratio=(confirm_1 / row_count) if row_count else None,
+            source_archive_confirm_policy=source_archive_confirm_policy,
+            data_quality_flags=";".join(quality_flags),
             missing_columns=missing_columns,
             extra_columns=extra_columns,
             duplicate_open_time_count=duplicates,
@@ -213,7 +251,7 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
             min_event_time_ms=None, max_event_time_ms=None, min_event_time_utc=None, max_event_time_utc=None,
             source_file_date=source_file_date, exchange_date_utc8_min=None, exchange_date_utc8_max=None,
             expected_rows_1m=1440, has_expected_1440_rows=False, confirm_1_count=0, confirm_0_count=0,
-            confirm_1_ratio=None, missing_columns=[], extra_columns=[], duplicate_open_time_count=0,
+            confirm_1_ratio=None, source_archive_confirm_policy="parse_error", data_quality_flags="parse_error", missing_columns=[], extra_columns=[], duplicate_open_time_count=0,
             out_of_order_time_count=0, gap_count=0, first_gaps=[], ohlc_invalid_count=0, negative_volume_count=0,
             allow_into_training=False, data_quality_score=0.0)
         return manifest, asdict(quality), []
