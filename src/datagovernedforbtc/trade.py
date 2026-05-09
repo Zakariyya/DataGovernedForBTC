@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import re
 from collections import defaultdict
@@ -347,7 +348,7 @@ def run_trade_minimal(root: Path, max_files: int | None = None, start_date: str 
             "source": str(p),
             "manifest": str(manifest_base / "file_manifest.json"),
             "quality_report": str(quality_base / "quality_report.json"),
-            "normalized_rows": len(normalized),
+            "normalized_rows": int(manifest.get("normalized_row_count") or 0),
             "feature_rows_1m": len(features),
         })
     summary["total_normalized_rows"] = total_normalized
@@ -383,6 +384,8 @@ def completed_checkpoint_matches(checkpoint: dict[str, Any] | None, source_hash:
         return False
     if checkpoint.get("status") != "completed":
         return False
+    if checkpoint.get("processing_engine") != "chunked_parquet_writer_online_1m_aggregation":
+        return False
     if checkpoint.get("source_file_hash") != source_hash:
         return False
     paths = checkpoint.get("output_paths") or {}
@@ -390,6 +393,300 @@ def completed_checkpoint_matches(checkpoint: dict[str, Any] | None, source_hash:
     feature = paths.get("feature_parquet")
     return bool(normalized and feature and Path(normalized).exists() and Path(feature).exists())
 
+
+
+
+def update_trade_feature_bucket(buckets: dict[tuple[str, int], dict[str, Any]], row: dict[str, Any]) -> None:
+    event_time = int(row["event_time_ms"])
+    window_start = (event_time // 60_000) * 60_000
+    key = (str(row["instrument_name"]), window_start)
+    bucket = buckets.get(key)
+    size = dec(row["size"])
+    quote = dec(row["quote_volume"])
+    side = str(row["side_raw"])
+    if bucket is None:
+        bucket = {
+            "first": row,
+            "trade_count": 0,
+            "buy_trade_count": 0,
+            "sell_trade_count": 0,
+            "buy_volume": Decimal("0"),
+            "sell_volume": Decimal("0"),
+            "buy_quote": Decimal("0"),
+            "sell_quote": Decimal("0"),
+            "total_volume": Decimal("0"),
+            "max_trade_size": Decimal("0"),
+            "large_trade_count": 0,
+            "source_file_names": set(),
+        }
+        buckets[key] = bucket
+    bucket["trade_count"] += 1
+    bucket["total_volume"] += size
+    bucket["source_file_names"].add(str(row["source_file_name"]))
+    if side == "buy":
+        bucket["buy_trade_count"] += 1
+        bucket["buy_volume"] += size
+        bucket["buy_quote"] += quote
+    elif side == "sell":
+        bucket["sell_trade_count"] += 1
+        bucket["sell_volume"] += size
+        bucket["sell_quote"] += quote
+    if size > bucket["max_trade_size"]:
+        bucket["max_trade_size"] = size
+        bucket["large_trade_count"] = 1
+    elif size == bucket["max_trade_size"]:
+        bucket["large_trade_count"] += 1
+
+
+def feature_rows_from_online_buckets(buckets: dict[tuple[str, int], dict[str, Any]]) -> list[dict[str, Any]]:
+    features: list[dict[str, Any]] = []
+    for (inst, window_start), bucket in sorted(buckets.items(), key=lambda x: (x[0][1], x[0][0])):
+        window_end = window_start + 60_000
+        buy_volume = bucket["buy_volume"]
+        sell_volume = bucket["sell_volume"]
+        total_volume = bucket["total_volume"]
+        volume_delta = buy_volume - sell_volume
+        volume_delta_ratio = (volume_delta / total_volume) if total_volume != 0 else None
+        max_size = bucket["max_trade_size"]
+        large_count = bucket["large_trade_count"]
+        first = bucket["first"]
+        features.append({
+            "exchange": "okx",
+            "dataset_type": "trade_feature",
+            "source_market_type": first.get("source_market_type", "unknown"),
+            "instrument_name": inst,
+            "instrument_type": first.get("instrument_type", "unknown"),
+            "window_interval": "1m",
+            "window_start_ms": window_start,
+            "window_start_utc": ms_to_utc_iso(window_start),
+            "window_end_ms": window_end,
+            "window_end_utc": ms_to_utc_iso(window_end),
+            "feature_time_ms": window_end,
+            "feature_time_utc": ms_to_utc_iso(window_end),
+            "available_time_ms": window_end,
+            "available_time_utc": ms_to_utc_iso(window_end),
+            "trade_count_1m": bucket["trade_count"],
+            "buy_trade_count_1m": bucket["buy_trade_count"],
+            "sell_trade_count_1m": bucket["sell_trade_count"],
+            "buy_volume_1m": dec_str(buy_volume),
+            "sell_volume_1m": dec_str(sell_volume),
+            "buy_quote_volume_1m": dec_str(bucket["buy_quote"]),
+            "sell_quote_volume_1m": dec_str(bucket["sell_quote"]),
+            "volume_delta_1m": dec_str(volume_delta),
+            "volume_delta_ratio_1m": "" if volume_delta_ratio is None else dec_str(volume_delta_ratio),
+            "avg_trade_size_1m": dec_str(total_volume / Decimal(bucket["trade_count"])) if bucket["trade_count"] else "0",
+            "max_trade_size_1m": dec_str(max_size),
+            "large_trade_count_1m": large_count,
+            "large_trade_volume_1m": dec_str(max_size * Decimal(large_count)),
+            "trade_velocity_1m": dec_str(Decimal(bucket["trade_count"]) / Decimal(60)),
+            "side_semantics": "unknown_not_assumed_taker",
+            "source_file_names": ",".join(sorted(bucket["source_file_names"])),
+            "schema_version": first.get("schema_version"),
+            "governance_version": first.get("governance_version"),
+            "feature_version": GovernanceVersions().feature_version,
+            "data_quality_score": "1.0",
+        })
+    return features
+
+
+def write_parquet_chunks(path: Path, chunks: list[list[dict[str, Any]]]) -> int:
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except Exception as exc:  # pragma: no cover - environment-specific
+        raise RuntimeError("pyarrow is required for chunked parquet output") from exc
+    path.parent.mkdir(parents=True, exist_ok=True)
+    writer = None
+    try:
+        for chunk in chunks:
+            if not chunk:
+                continue
+            table = pa.Table.from_pylist(chunk)
+            if writer is None:
+                writer = pq.ParquetWriter(path, table.schema)
+            writer.write_table(table)
+    finally:
+        if writer is not None:
+            writer.close()
+    if writer is None:
+        raise ValueError("cannot write empty parquet chunks")
+    return pq.ParquetFile(path).metadata.num_row_groups
+
+
+def process_trade_file_chunked(path: Path, root: Path, normalized_path: Path, chunk_size: int) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    versions = GovernanceVersions()
+    file_hash = sha256_file(path)
+    source_file_date = source_file_date_from_name(path.name)
+    source_market_type = infer_source_market_type(path)
+    manifest: dict[str, Any] = {
+        "source_file_name": path.name,
+        "source_file_path": str(path),
+        "source_file_hash": file_hash,
+        "dataset_type": "trade",
+        "source_market_type": source_market_type,
+        "exchange": "okx",
+        "instrument_name": None,
+        "instrument_type": None,
+        "source_file_date": source_file_date,
+        "exchange_date_utc8": source_file_date,
+        "row_count": 0,
+        "min_event_time_ms": None,
+        "max_event_time_ms": None,
+        "schema_version": versions.schema_version,
+        "governance_version": versions.governance_version,
+        "parse_status": "unknown",
+        "parse_error_message": None,
+    }
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            header = list(reader.fieldnames or [])
+            expected = EXPECTED_COLUMNS["trade"]
+            missing = [c for c in expected if c not in header]
+            extra = [c for c in header if c not in expected]
+            if missing:
+                raise ValueError(f"missing columns: {missing}")
+            seen: set[str] = set()
+            duplicate_count = 0
+            invalid_price = 0
+            invalid_size = 0
+            invalid_side = 0
+            out_of_order = 0
+            previous_time: int | None = None
+            instruments: set[str] = set()
+            times: list[int] = []
+            row_count = 0
+            normalized_count = 0
+            chunks: list[list[dict[str, Any]]] = []
+            current_chunk: list[dict[str, Any]] = []
+            feature_buckets: dict[tuple[str, int], dict[str, Any]] = {}
+            for raw in reader:
+                row_count += 1
+                trade_id = str(raw["trade_id"])
+                if trade_id in seen:
+                    duplicate_count += 1
+                    continue
+                seen.add(trade_id)
+                inst = raw["instrument_name"]
+                instruments.add(inst)
+                side_raw = str(raw["side"]).strip().lower()
+                if side_raw not in {"buy", "sell"}:
+                    invalid_side += 1
+                event_time = int(float(raw["created_time"]))
+                if previous_time is not None and event_time < previous_time:
+                    out_of_order += 1
+                previous_time = event_time
+                price = dec(raw["price"])
+                size = dec(raw["size"])
+                if price <= 0:
+                    invalid_price += 1
+                if size <= 0:
+                    invalid_size += 1
+                quote = price * size
+                normalized = {
+                    "exchange": "okx",
+                    "dataset_type": "trade",
+                    "source_market_type": source_market_type,
+                    "instrument_name": inst,
+                    "instrument_type": infer_instrument_type_from_path(inst, path),
+                    "event_time_ms": event_time,
+                    "event_time_utc": ms_to_utc_iso(event_time),
+                    "available_time_ms": event_time,
+                    "available_time_utc": ms_to_utc_iso(event_time),
+                    "created_time_ms": event_time,
+                    "created_time_utc": ms_to_utc_iso(event_time),
+                    "exchange_date_utc8": exchange_date_utc8_from_ms(event_time),
+                    "source_file_date": source_file_date,
+                    "trade_id": trade_id,
+                    "side_raw": side_raw,
+                    "price": dec_str(price),
+                    "size": dec_str(size),
+                    "quote_volume": dec_str(quote),
+                    "side_semantics": "unknown_not_assumed_taker",
+                    "source_file_name": path.name,
+                    "source_file_hash": file_hash,
+                    "schema_version": versions.schema_version,
+                    "governance_version": versions.governance_version,
+                    "data_quality_score": "1.0",
+                }
+                times.append(event_time)
+                normalized_count += 1
+                update_trade_feature_bucket(feature_buckets, normalized)
+                current_chunk.append(normalized)
+                if len(current_chunk) >= max(1, chunk_size):
+                    chunks.append(current_chunk)
+                    current_chunk = []
+            if current_chunk:
+                chunks.append(current_chunk)
+        row_groups = write_parquet_chunks(normalized_path, chunks) if chunks else 0
+        features = feature_rows_from_online_buckets(feature_buckets)
+        inst_name = sorted(instruments)[0] if len(instruments) == 1 else None
+        penalties = min(25, duplicate_count) + min(25, invalid_side * 5) + min(25, invalid_price * 5 + invalid_size * 5) + min(25, out_of_order)
+        score = max(0.0, 100.0 - penalties) / 100.0
+        allow = bool(normalized_count and invalid_side == 0 and invalid_price == 0 and invalid_size == 0)
+        manifest.update({
+            "instrument_name": inst_name,
+            "instrument_type": infer_instrument_type_from_path(inst_name or "", path) if inst_name else "multi_instrument",
+            "row_count": row_count,
+            "normalized_row_count": normalized_count,
+            "min_event_time_ms": min(times) if times else None,
+            "max_event_time_ms": max(times) if times else None,
+            "parse_status": "success",
+            "zip_inner_csv": None,
+        })
+        quality = TradeQuality(
+            source_file_name=path.name,
+            parse_status="success",
+            parse_error_message=None,
+            row_count=row_count,
+            normalized_row_count=normalized_count,
+            missing_columns=missing,
+            extra_columns=extra,
+            instrument_count=len(instruments),
+            min_created_time_ms=min(times) if times else None,
+            max_created_time_ms=max(times) if times else None,
+            min_created_time_utc=ms_to_utc_iso(min(times)) if times else None,
+            max_created_time_utc=ms_to_utc_iso(max(times)) if times else None,
+            duplicate_trade_id_count=duplicate_count,
+            out_of_order_time_count=out_of_order,
+            invalid_price_count=invalid_price,
+            invalid_size_count=invalid_size,
+            invalid_side_count=invalid_side,
+            side_semantics="unknown_not_assumed_taker",
+            allow_into_feature_aggregation=allow,
+            data_quality_score=score,
+        )
+        stats = {
+            "processing_engine": "chunked_parquet_writer_online_1m_aggregation",
+            "chunk_size": chunk_size,
+            "normalized_parquet_row_groups": row_groups,
+        }
+        return manifest, asdict(quality), features, stats
+    except Exception as e:
+        manifest.update({"parse_status": "error", "parse_error_message": str(e)})
+        quality = TradeQuality(
+            source_file_name=path.name,
+            parse_status="error",
+            parse_error_message=str(e),
+            row_count=0,
+            normalized_row_count=0,
+            missing_columns=[],
+            extra_columns=[],
+            instrument_count=0,
+            min_created_time_ms=None,
+            max_created_time_ms=None,
+            min_created_time_utc=None,
+            max_created_time_utc=None,
+            duplicate_trade_id_count=0,
+            out_of_order_time_count=0,
+            invalid_price_count=0,
+            invalid_size_count=0,
+            invalid_side_count=0,
+            side_semantics="unknown_not_assumed_taker",
+            allow_into_feature_aggregation=False,
+            data_quality_score=0.0,
+        )
+        return manifest, asdict(quality), [], {"processing_engine": "chunked_parquet_writer_online_1m_aggregation", "chunk_size": chunk_size, "normalized_parquet_row_groups": 0}
 
 def run_trade_stream(
     root: Path,
@@ -399,14 +696,14 @@ def run_trade_stream(
     instrument: str | None = None,
     max_files: int | None = None,
     resume: bool = True,
+    chunk_size: int = 100_000,
 ) -> dict[str, Any]:
-    """Run date-bounded Trade governance with Parquet outputs and file-level checkpoints.
+    """Run date-bounded Trade governance with chunked Parquet outputs and file-level checkpoints.
 
-    This is a safer full-window path than ``trade-minimal``: it avoids normalized
-    CSV tick output and can resume completed source files by source hash.
-    Current checkpoint granularity is one raw source file; raw rows are still
-    normalized per file before Parquet write, so this is a foundation for full
-    history rather than a final chunked tick engine.
+    This is the long-window Trade path: it avoids normalized CSV tick output,
+    writes normalized ticks through Parquet row groups, aggregates 1m trade
+    features online, and resumes completed source files by source hash plus
+    processing-engine marker.
     """
     files = select_trade_source_files(root, start_date=start_date, end_date=end_date, max_files=max_files, market=market, instrument=instrument)
     summary: dict[str, Any] = {
@@ -419,6 +716,8 @@ def run_trade_stream(
         "instrument": instrument,
         "max_files": max_files,
         "resume": resume,
+        "chunk_size": chunk_size,
+        "processing_engine": "chunked_parquet_writer_online_1m_aggregation",
         "processed_count": 0,
         "skipped_count": 0,
         "error_count": 0,
@@ -449,7 +748,7 @@ def run_trade_stream(
             })
             continue
 
-        manifest, quality, normalized = process_trade_file(path, root)
+        manifest, quality, features, stream_stats = process_trade_file_chunked(path, root, normalized_path, chunk_size=chunk_size)
         if manifest.get("parse_status") != "success":
             summary["error_count"] += 1
             failed = {
@@ -459,14 +758,13 @@ def run_trade_stream(
                 "source_file_hash": source_hash,
                 "source_file_size": path.stat().st_size,
                 "parse_error_message": manifest.get("parse_error_message"),
+                "processing_engine": stream_stats.get("processing_engine"),
+                "chunk_size": chunk_size,
             }
             write_json(checkpoint_path, failed)
             summary["outputs"].append({"source": str(path), "status": "error", "checkpoint": str(checkpoint_path), "source_file_hash": source_hash})
             continue
 
-        features = aggregate_trade_1m(normalized)
-        if normalized:
-            write_parquet_rows(normalized_path, normalized)
         if features:
             write_parquet_rows(feature_path, features)
         manifest_base = root / "manifests" / "exchange=okx" / "dataset_type=trade" / f"market={selected_market}" / f"instrument={selected_instrument}" / f"exchange_date_utc8={source_date}"
@@ -482,7 +780,7 @@ def run_trade_stream(
             "source_file_date": source_date,
             "market": selected_market,
             "instrument": selected_instrument,
-            "normalized_rows": len(normalized),
+            "normalized_rows": int(manifest.get("normalized_row_count") or 0),
             "feature_rows_1m": len(features),
             "duplicate_trade_id_count": int(quality.get("duplicate_trade_id_count") or 0),
             "output_paths": {
@@ -496,10 +794,13 @@ def run_trade_stream(
             "schema_version": GovernanceVersions().schema_version,
             "feature_version": GovernanceVersions().feature_version,
             "governance_version": GovernanceVersions().governance_version,
+            "processing_engine": stream_stats.get("processing_engine"),
+            "chunk_size": chunk_size,
+            "normalized_parquet_row_groups": stream_stats.get("normalized_parquet_row_groups"),
         }
         write_json(checkpoint_path, checkpoint_doc)
         summary["processed_count"] += 1
-        summary["total_normalized_rows"] += len(normalized)
+        summary["total_normalized_rows"] += int(manifest.get("normalized_row_count") or 0)
         summary["total_feature_rows_1m"] += len(features)
         summary["duplicate_trade_id_count"] += int(quality.get("duplicate_trade_id_count") or 0)
         summary["outputs"].append({
@@ -511,7 +812,7 @@ def run_trade_stream(
             "quality_report": str(quality_base / "quality_report.json"),
             "normalized_parquet": str(normalized_path),
             "feature_parquet": str(feature_path),
-            "normalized_rows": len(normalized),
+            "normalized_rows": int(manifest.get("normalized_row_count") or 0),
             "feature_rows_1m": len(features),
         })
     summary_path = root / "reports" / "quality" / "trade_stream_summary.json"

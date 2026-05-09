@@ -39,5 +39,34 @@ class TradeStreamCliTest(unittest.TestCase):
             self.assertTrue(Path(payload["outputs"][0]["normalized_parquet"]).exists())
 
 
+    def test_trade_stream_cli_accepts_chunk_size_for_row_group_control(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "okx" / "Trade" / "Spot" / "2024" / "BTC-USDT-trades-2024-05-21.csv"
+            src.parent.mkdir(parents=True, exist_ok=True)
+            with src.open("w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["instrument_name", "trade_id", "side", "price", "size", "created_time"])
+                w.writerows([
+                    ["BTC-USDT", "t1", "buy", "100", "0.1", "0"],
+                    ["BTC-USDT", "t2", "sell", "101", "0.2", "60000"],
+                ])
+            out = StringIO()
+            with redirect_stdout(out):
+                code = main([
+                    "--root", str(root),
+                    "trade-stream",
+                    "--start-date", "2024-05-21",
+                    "--end-date", "2024-05-21",
+                    "--market", "spot",
+                    "--instrument", "BTC-USDT",
+                    "--chunk-size", "1",
+                ])
+            self.assertEqual(code, 0)
+            payload = json.loads(out.getvalue())
+            self.assertEqual(payload["chunk_size"], 1)
+            self.assertEqual(payload["processing_engine"], "chunked_parquet_writer_online_1m_aggregation")
+
+
 if __name__ == "__main__":
     unittest.main()

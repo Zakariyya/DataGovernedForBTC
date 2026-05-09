@@ -583,4 +583,84 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-window -
 - 当前 checkpoint 粒度为“单个 raw source file”，已经能支持日期窗口级断点续跑。
 - 当前实现避免了 normalized tick CSV 继续膨胀，但单文件内部仍会构建 normalized rows 后写 Parquet；这已经适合推进数月窗口 smoke，但还不是最终的 chunked ParquetWriter。
 - 后续若扩到全年或多年 Trade 历史，应继续升级为 chunked writer / row-group writer，并把 1m 聚合改成在线 bucket 聚合。
+## 里程碑 14：Trade Chunked ParquetWriter + 在线 1m 聚合升级
+
+完成时间：2026-05-09
+
+### ✅ 已完成
+
+在里程碑 13 的 `trade-stream` 基础上，继续完成真正的 chunked streaming 升级：
+
+- `trade-stream` 新增 `--chunk-size` 参数，默认 `100000`。
+- normalized tick 不再通过单次 pandas DataFrame 全量写 Parquet，而是通过 `pyarrow.parquet.ParquetWriter` 分 chunk 写入 row group。
+- Trade 1m feature 不再依赖完整 normalized rows 列表二次聚合，而是在读取 raw CSV 时在线维护 1m bucket。
+- checkpoint 新增：
+  - `processing_engine=chunked_parquet_writer_online_1m_aggregation`
+  - `chunk_size`
+  - `normalized_parquet_row_groups`
+- resume 只信任当前 processing engine 生成的 checkpoint；旧 checkpoint 或缺少 engine marker 的 checkpoint 会重新处理，避免升级后误跳过。
+
+### 🧪 TDD 覆盖
+
+新增/扩展测试：
+
+- `test_trade_stream_uses_chunked_parquet_writer_and_online_aggregation`
+- `test_trade_stream_cli_accepts_chunk_size_for_row_group_control`
+- `test_trade_stream_reprocesses_legacy_checkpoint_without_chunked_engine_marker`
+
+验证点：
+
+- 小 chunk 下会产生多个 Parquet row group。
+- 在线 1m 聚合输出的 `trade_count_1m`、`volume_delta_1m` 符合预期。
+- CLI 可传 `--chunk-size`。
+- 旧 checkpoint 不会被新版 resume 误信任。
+
+全量测试：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m compileall -q src tests
+PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
+```
+
+结果：32 tests OK。
+
+### 📊 真实单日 smoke 验证
+
+命令：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli trade-stream \
+  --start-date 2024-05-20 \
+  --end-date 2024-05-20 \
+  --market spot \
+  --instrument BTC-USDT \
+  --resume \
+  --chunk-size 100000
+```
+
+结果：
+
+- 首次新版引擎处理：`processed_count=1`。
+- normalized rows：251,498。
+- Trade 1m feature rows：1,440。
+- duplicate trade_id：0。
+- normalized Parquet row groups：3。
+- 第二次同命令：`processed_count=0`, `skipped_count=1`。
+
+checkpoint 示例：
+
+```json
+{
+  "processing_engine": "chunked_parquet_writer_online_1m_aggregation",
+  "chunk_size": 100000,
+  "normalized_parquet_row_groups": 3
+}
+```
+
+### 🔒 当前边界
+
+- 仍保持 raw source zone 只读，不修改、不移动、不补数据。
+- checkpoint 粒度仍是单 raw source file；这适合日文件级 resume。
+- 为了按 `trade_id` 去重，当前仍维护文件级 seen trade_id 集合；这比完整 normalized rows 列表轻得多，但多年极端大文件仍可能需要外部排序/去重或 spill-to-disk。
+- normalized Parquet 的行顺序跟 raw source 读取顺序一致；1m feature 聚合不依赖该顺序。
 
