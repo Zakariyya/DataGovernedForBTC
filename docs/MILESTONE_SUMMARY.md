@@ -517,4 +517,70 @@ reports/gap/orderbook_gap_and_quality_review_2024-05-20_to_2024-06-11.md
 1. 高优先级补齐真实 OKX Spot BTC-USDT Orderbook `2024-05-19`：当前本地不存在该文件，导致目标窗口开头 UTC `2024-05-19 16:01` 至 `2024-05-20 00:00` 之间的 Orderbook feature 缺失。
 2. 质量复核日期：`2024-05-22`、`2024-05-23`、`2024-06-04`、`2024-06-05`，原因分别为 crossed book 或分钟特征不足 1440。
 3. 若补不到真实 OKX 原始文件，必须保留缺失与阻断；禁止合成、插值、未来 forward-fill 或使用其他交易所替代。
+## 里程碑 13：Trade Parquet + Checkpoint 治理基础设施
+
+完成时间：2026-05-09
+
+### ✅ 已完成
+
+- 新增 `trade-stream` CLI，作为 `trade-minimal` 的长期窗口替代入口：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli trade-stream \
+  --start-date 2024-05-20 \
+  --end-date 2024-05-20 \
+  --market spot \
+  --instrument BTC-USDT \
+  --resume
+```
+
+- 输出 normalized tick Parquet，而不是继续写出 normalized tick CSV：
+
+```text
+data_lake/normalized/exchange=okx/dataset_type=trade/market=spot/instrument=BTC-USDT/format=parquet/exchange_date_utc8=*/trade_normalized.parquet
+```
+
+- 输出 Trade 1m Feature Parquet：
+
+```text
+data_lake/features/exchange=okx/dataset_type=trade_feature/market=spot/instrument=BTC-USDT/interval=1m/format=parquet/exchange_date_utc8=*/trade_features_1m.parquet
+```
+
+- 新增文件级 checkpoint：
+
+```text
+checkpoints/exchange=okx/dataset_type=trade/market=spot/instrument=BTC-USDT/exchange_date_utc8=*/checkpoint.json
+```
+
+- checkpoint 记录 `source_file_hash`、行数、输出路径、输出 Parquet hash、schema/feature/governance version。
+- `--resume` 时，如果 checkpoint 为 completed 且 source hash 未变化，并且输出文件存在，则跳过重复处理。
+- 如果 raw source hash 变化，则自动重新处理该文件。
+- `curated-state-window` 已支持读取 Trade Feature Parquet；当同一日期同时存在 legacy CSV 与 Parquet 时，优先使用 Parquet，避免重复读取。
+- 新增 TDD 测试：
+  - `tests/test_trade_streaming_checkpoint.py`
+  - `tests/test_trade_stream_cli.py`
+  - `tests/test_curated_state_parquet_trade.py`
+
+### 📊 真实单日 smoke 验证
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli trade-stream --start-date 2024-05-20 --end-date 2024-05-20 --market spot --instrument BTC-USDT --resume
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli trade-stream --start-date 2024-05-20 --end-date 2024-05-20 --market spot --instrument BTC-USDT --resume
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-window --start-date 2024-05-20 --end-date 2024-05-20 --label stream_parquet_smoke_2024-05-20
+```
+
+结果：
+
+- 首次 `trade-stream` 处理 1 个真实 Spot BTC-USDT Trade 文件。
+- normalized Parquet rows：251,498。
+- Trade 1m Feature Parquet rows：1,440。
+- duplicate trade_id：0。
+- 第二次 `trade-stream --resume` 成功跳过：processed=0, skipped=1。
+- Curated smoke：`trade_feature_files_used=1`，确认 Parquet feature 可被 curated 读取。
+
+### 🔒 当前边界
+
+- 当前 checkpoint 粒度为“单个 raw source file”，已经能支持日期窗口级断点续跑。
+- 当前实现避免了 normalized tick CSV 继续膨胀，但单文件内部仍会构建 normalized rows 后写 Parquet；这已经适合推进数月窗口 smoke，但还不是最终的 chunked ParquetWriter。
+- 后续若扩到全年或多年 Trade 历史，应继续升级为 chunked writer / row-group writer，并把 1m 聚合改成在线 bucket 聚合。
 

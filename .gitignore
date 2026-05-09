@@ -52,6 +52,7 @@ data_lake/**/*.csv
 data_lake/**/*.parquet
 data_lake/**/*.json
 data_lake/**/*.duckdb
+checkpoints/**/*.json
 snapshots/**/*.csv
 snapshots/**/*.parquet
 snapshots/**/*.json

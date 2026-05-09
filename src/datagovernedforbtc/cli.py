@@ -27,6 +27,15 @@ def build_parser() -> argparse.ArgumentParser:
     trade_parser.add_argument("--end-date", default=None, help="Inclusive source file date filter, YYYY-MM-DD.")
     trade_parser.add_argument("--market", default=None, choices=["spot", "perpetual"], help="Optional source market filter.")
     trade_parser.add_argument("--instrument", default=None, help="Optional instrument filename prefix filter, e.g. BTC-USDT.")
+    trade_stream_parser = sub.add_parser("trade-stream", help="Run Trade governance with Parquet outputs and file-level checkpoints.")
+    trade_stream_parser.add_argument("--max-files", type=int, default=None, help="Optional safety limit after date-range filtering.")
+    trade_stream_parser.add_argument("--start-date", default=None, help="Inclusive source file date filter, YYYY-MM-DD.")
+    trade_stream_parser.add_argument("--end-date", default=None, help="Inclusive source file date filter, YYYY-MM-DD.")
+    trade_stream_parser.add_argument("--market", default=None, choices=["spot", "perpetual"], help="Optional source market filter.")
+    trade_stream_parser.add_argument("--instrument", default=None, help="Optional instrument filename prefix filter, e.g. BTC-USDT.")
+    trade_stream_parser.add_argument("--resume", action="store_true", help="Skip completed source files when checkpoint source hash still matches.")
+    trade_stream_parser.add_argument("--no-resume", dest="resume", action="store_false", help="Force reprocessing even if matching completed checkpoints exist.")
+    trade_stream_parser.set_defaults(resume=True)
     ob_parser = sub.add_parser("orderbook-audit", help="Run safe Orderbook JSONL audit without full L2 reconstruction.")
     ob_parser.add_argument("--max-lines", type=int, default=5000, help="Maximum JSONL rows per orderbook file to inspect.")
     ob_parser.add_argument("--max-files", type=int, default=None, help="Optional safety limit for processing the first N orderbook files.")
@@ -88,6 +97,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "trade-minimal":
         from datagovernedforbtc.trade import run_trade_minimal
         print(json.dumps(run_trade_minimal(root, max_files=args.max_files, start_date=args.start_date, end_date=args.end_date, market=args.market, instrument=args.instrument), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "trade-stream":
+        from datagovernedforbtc.trade import run_trade_stream
+        print(json.dumps(run_trade_stream(root, max_files=args.max_files, start_date=args.start_date, end_date=args.end_date, market=args.market, instrument=args.instrument, resume=args.resume), ensure_ascii=False, indent=2))
         return 0
     if args.command == "orderbook-audit":
         from datagovernedforbtc.orderbook import run_orderbook_audit

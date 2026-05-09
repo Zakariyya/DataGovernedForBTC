@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import GovernanceVersions
-from .io_utils import read_csv_rows_from_path, sha256_file, write_csv_rows
+from .io_utils import read_csv_rows_from_path, sha256_file, write_csv_rows, write_parquet_rows
 from .path_semantics import infer_instrument_type_from_path, infer_source_market_type
 from .schemas import EXPECTED_COLUMNS
 from .time_semantics import exchange_date_utc8_from_ms, ms_to_utc_iso
@@ -357,3 +357,165 @@ def run_trade_minimal(root: Path, max_files: int | None = None, start_date: str 
     write_json(summary_path, summary)
     summary["summary_path"] = str(summary_path)
     return summary
+
+
+def checkpoint_path_for_trade(root: Path, market: str, instrument: str, source_date: str) -> Path:
+    return root / "checkpoints" / "exchange=okx" / "dataset_type=trade" / f"market={market}" / f"instrument={instrument}" / f"exchange_date_utc8={source_date}" / "checkpoint.json"
+
+
+def read_json_if_exists(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def parquet_output_paths(root: Path, market: str, instrument: str, source_date: str) -> tuple[Path, Path]:
+    normalized_path = root / "data_lake" / "normalized" / "exchange=okx" / "dataset_type=trade" / f"market={market}" / f"instrument={instrument}" / "format=parquet" / f"exchange_date_utc8={source_date}" / "trade_normalized.parquet"
+    feature_path = root / "data_lake" / "features" / "exchange=okx" / "dataset_type=trade_feature" / f"market={market}" / f"instrument={instrument}" / "interval=1m" / "format=parquet" / f"exchange_date_utc8={source_date}" / "trade_features_1m.parquet"
+    return normalized_path, feature_path
+
+
+def completed_checkpoint_matches(checkpoint: dict[str, Any] | None, source_hash: str) -> bool:
+    if not checkpoint:
+        return False
+    if checkpoint.get("status") != "completed":
+        return False
+    if checkpoint.get("source_file_hash") != source_hash:
+        return False
+    paths = checkpoint.get("output_paths") or {}
+    normalized = paths.get("normalized_parquet")
+    feature = paths.get("feature_parquet")
+    return bool(normalized and feature and Path(normalized).exists() and Path(feature).exists())
+
+
+def run_trade_stream(
+    root: Path,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    market: str | None = None,
+    instrument: str | None = None,
+    max_files: int | None = None,
+    resume: bool = True,
+) -> dict[str, Any]:
+    """Run date-bounded Trade governance with Parquet outputs and file-level checkpoints.
+
+    This is a safer full-window path than ``trade-minimal``: it avoids normalized
+    CSV tick output and can resume completed source files by source hash.
+    Current checkpoint granularity is one raw source file; raw rows are still
+    normalized per file before Parquet write, so this is a foundation for full
+    history rather than a final chunked tick engine.
+    """
+    files = select_trade_source_files(root, start_date=start_date, end_date=end_date, max_files=max_files, market=market, instrument=instrument)
+    summary: dict[str, Any] = {
+        "dataset_type": "trade",
+        "mode": "stream_parquet_checkpoint",
+        "source_file_count": len(files),
+        "start_date": start_date,
+        "end_date": end_date,
+        "market": market,
+        "instrument": instrument,
+        "max_files": max_files,
+        "resume": resume,
+        "processed_count": 0,
+        "skipped_count": 0,
+        "error_count": 0,
+        "total_normalized_rows": 0,
+        "total_feature_rows_1m": 0,
+        "duplicate_trade_id_count": 0,
+        "outputs": [],
+    }
+    for path in files:
+        source_hash = sha256_file(path)
+        source_date = source_file_date_from_name(path.name) or "unknown"
+        selected_market = infer_source_market_type(path)
+        selected_instrument = instrument or path.name.split("-trades-", 1)[0]
+        checkpoint_path = checkpoint_path_for_trade(root, selected_market, selected_instrument, source_date)
+        checkpoint = read_json_if_exists(checkpoint_path)
+        normalized_path, feature_path = parquet_output_paths(root, selected_market, selected_instrument, source_date)
+        if resume and completed_checkpoint_matches(checkpoint, source_hash):
+            summary["skipped_count"] += 1
+            summary["outputs"].append({
+                "source": str(path),
+                "status": "skipped_completed",
+                "source_file_hash": source_hash,
+                "checkpoint": str(checkpoint_path),
+                "normalized_parquet": str(normalized_path),
+                "feature_parquet": str(feature_path),
+                "normalized_rows": int(checkpoint.get("normalized_rows", 0)),
+                "feature_rows_1m": int(checkpoint.get("feature_rows_1m", 0)),
+            })
+            continue
+
+        manifest, quality, normalized = process_trade_file(path, root)
+        if manifest.get("parse_status") != "success":
+            summary["error_count"] += 1
+            failed = {
+                "status": "error",
+                "source_file_path": str(path),
+                "source_file_name": path.name,
+                "source_file_hash": source_hash,
+                "source_file_size": path.stat().st_size,
+                "parse_error_message": manifest.get("parse_error_message"),
+            }
+            write_json(checkpoint_path, failed)
+            summary["outputs"].append({"source": str(path), "status": "error", "checkpoint": str(checkpoint_path), "source_file_hash": source_hash})
+            continue
+
+        features = aggregate_trade_1m(normalized)
+        if normalized:
+            write_parquet_rows(normalized_path, normalized)
+        if features:
+            write_parquet_rows(feature_path, features)
+        manifest_base = root / "manifests" / "exchange=okx" / "dataset_type=trade" / f"market={selected_market}" / f"instrument={selected_instrument}" / f"exchange_date_utc8={source_date}"
+        quality_base = root / "reports" / "quality" / "exchange=okx" / "dataset_type=trade" / f"market={selected_market}" / f"instrument={selected_instrument}" / f"exchange_date_utc8={source_date}"
+        write_json(manifest_base / "file_manifest.json", manifest)
+        write_json(quality_base / "quality_report.json", quality)
+        checkpoint_doc = {
+            "status": "completed",
+            "source_file_path": str(path),
+            "source_file_name": path.name,
+            "source_file_hash": source_hash,
+            "source_file_size": path.stat().st_size,
+            "source_file_date": source_date,
+            "market": selected_market,
+            "instrument": selected_instrument,
+            "normalized_rows": len(normalized),
+            "feature_rows_1m": len(features),
+            "duplicate_trade_id_count": int(quality.get("duplicate_trade_id_count") or 0),
+            "output_paths": {
+                "normalized_parquet": str(normalized_path),
+                "feature_parquet": str(feature_path),
+                "manifest": str(manifest_base / "file_manifest.json"),
+                "quality_report": str(quality_base / "quality_report.json"),
+            },
+            "normalized_parquet_sha256": sha256_file(normalized_path) if normalized_path.exists() else None,
+            "feature_parquet_sha256": sha256_file(feature_path) if feature_path.exists() else None,
+            "schema_version": GovernanceVersions().schema_version,
+            "feature_version": GovernanceVersions().feature_version,
+            "governance_version": GovernanceVersions().governance_version,
+        }
+        write_json(checkpoint_path, checkpoint_doc)
+        summary["processed_count"] += 1
+        summary["total_normalized_rows"] += len(normalized)
+        summary["total_feature_rows_1m"] += len(features)
+        summary["duplicate_trade_id_count"] += int(quality.get("duplicate_trade_id_count") or 0)
+        summary["outputs"].append({
+            "source": str(path),
+            "status": "processed",
+            "source_file_hash": source_hash,
+            "checkpoint": str(checkpoint_path),
+            "manifest": str(manifest_base / "file_manifest.json"),
+            "quality_report": str(quality_base / "quality_report.json"),
+            "normalized_parquet": str(normalized_path),
+            "feature_parquet": str(feature_path),
+            "normalized_rows": len(normalized),
+            "feature_rows_1m": len(features),
+        })
+    summary_path = root / "reports" / "quality" / "trade_stream_summary.json"
+    write_json(summary_path, summary)
+    summary["summary_path"] = str(summary_path)
+    return summary
+

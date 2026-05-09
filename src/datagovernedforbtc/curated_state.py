@@ -222,11 +222,27 @@ def build_curated_market_state_1m(
     return output
 
 
-def load_csvs(paths: list[Path]) -> list[dict[str, Any]]:
+def read_parquet_dicts(path: Path) -> list[dict[str, Any]]:
+    try:
+        import pandas as pd
+    except Exception as exc:  # pragma: no cover - environment-specific
+        raise RuntimeError("pandas is required for parquet input") from exc
+    return pd.read_parquet(path).to_dict(orient="records")
+
+
+def load_tabulars(paths: list[Path]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for p in paths:
-        rows.extend(read_csv_dicts(p))
+        if p.suffix.lower() == ".parquet":
+            rows.extend(read_parquet_dicts(p))
+        else:
+            rows.extend(read_csv_dicts(p))
     return rows
+
+
+def load_csvs(paths: list[Path]) -> list[dict[str, Any]]:
+    # Backward-compatible name for existing callers; now accepts CSV or Parquet.
+    return load_tabulars(paths)
 
 
 def write_json(path: Path, obj: Any) -> None:
@@ -253,6 +269,20 @@ def filter_paths_by_date(paths: list[Path], start_date: str | None, end_date: st
     return selected
 
 
+def prefer_parquet_by_partition(paths: list[Path]) -> list[Path]:
+    by_date: dict[str, Path] = {}
+    no_date: list[Path] = []
+    for path in sorted(paths):
+        source_date = source_date_from_partition(path)
+        if source_date is None:
+            no_date.append(path)
+            continue
+        existing = by_date.get(source_date)
+        if existing is None or (path.suffix.lower() == ".parquet" and existing.suffix.lower() != ".parquet"):
+            by_date[source_date] = path
+    return sorted(no_date + list(by_date.values()))
+
+
 def run_curated_state_window(root: Path, start_date: str, end_date: str, label: str | None = None) -> dict[str, Any]:
     label = label or f"{start_date}_to_{end_date}"
     candle_paths = filter_paths_by_date(
@@ -270,11 +300,12 @@ def run_curated_state_window(root: Path, start_date: str, end_date: str, label: 
         start_date,
         end_date,
     )
-    trade_paths = filter_paths_by_date(
-        list((root / "data_lake" / "features" / "exchange=okx" / "dataset_type=trade_feature" / "market=spot" / "instrument=BTC-USDT" / "interval=1m").rglob("trade_features_1m.csv")),
+    trade_paths = prefer_parquet_by_partition(filter_paths_by_date(
+        list((root / "data_lake" / "features" / "exchange=okx" / "dataset_type=trade_feature" / "market=spot" / "instrument=BTC-USDT" / "interval=1m").rglob("trade_features_1m.csv"))
+        + list((root / "data_lake" / "features" / "exchange=okx" / "dataset_type=trade_feature" / "market=spot" / "instrument=BTC-USDT" / "interval=1m").rglob("trade_features_1m.parquet")),
         start_date,
         end_date,
-    )
+    ))
     orderbook_paths = filter_paths_by_date(
         list((root / "data_lake" / "features" / "exchange=okx" / "dataset_type=orderbook_feature" / "market=spot" / "instrument=BTC-USDT" / "interval=1m").rglob("orderbook_features_1m.csv")),
         start_date,
