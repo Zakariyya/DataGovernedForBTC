@@ -24,6 +24,18 @@ def source_file_date_from_name(name: str) -> str | None:
     return m.group(1) if m else None
 
 
+def orderbook_extension(name: str) -> str:
+    lower = name.lower()
+    for compound in (".data.txt", ".tar.gz", ".tar.tar"):
+        if lower.endswith(compound):
+            return compound
+    return Path(name).suffix.lower()
+
+
+def is_orderbook_source_file(path: Path) -> bool:
+    return orderbook_extension(path.name) in {".data", ".data.txt", ".tar.gz", ".tar.tar"}
+
+
 def write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -64,7 +76,7 @@ def scan_raw_feature_points(root: Path) -> dict[str, Any]:
         base = root / "okx" / dirname
         files = [p for p in base.rglob("*") if p.is_file()] if base.exists() else []
         if dataset_type == "orderbook":
-            files = [p for p in files if p.name.endswith(".data") or p.name.endswith(".data.txt") or p.name.endswith(".tar.gz")]
+            files = [p for p in files if is_orderbook_source_file(p)]
         else:
             files = [p for p in files if p.suffix.lower() in {".csv", ".zip"}]
         dates = sorted({d for p in files if (d := source_file_date_from_name(p.name))})
@@ -75,7 +87,7 @@ def scan_raw_feature_points(root: Path) -> dict[str, Any]:
         for p in files:
             market = infer_source_market_type(p)
             markets[market] = markets.get(market, 0) + 1
-            suffix = ".tar.gz" if p.name.endswith(".tar.gz") else (".data.txt" if p.name.endswith(".data.txt") else p.suffix.lower())
+            suffix = orderbook_extension(p.name) if dataset_type == "orderbook" else p.suffix.lower()
             extensions[suffix] = extensions.get(suffix, 0) + 1
         for market in sorted(markets):
             candidates = [p for p in files if infer_source_market_type(p) == market]
@@ -87,8 +99,8 @@ def scan_raw_feature_points(root: Path) -> dict[str, Any]:
             else:
                 sample = sorted(candidates)[0]
             sample_files.append(str(sample.relative_to(root)))
-            if dataset_type == "orderbook" and sample.name.endswith(".tar.gz"):
-                sample_fields[market] = ["tar_gz_archive_not_expanded"]
+            if dataset_type == "orderbook" and orderbook_extension(sample.name) in {".tar.gz", ".tar.tar"}:
+                sample_fields[market] = [f"{orderbook_extension(sample.name).lstrip('.')}_archive_not_expanded"]
             elif dataset_type == "orderbook":
                 sample_fields[market] = sample_jsonl_keys(sample)
             elif sample.suffix.lower() == ".csv":

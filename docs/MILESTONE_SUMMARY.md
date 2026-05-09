@@ -250,7 +250,7 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli feature-scan
 - Borrowing Rate：34 文件，spot，2021-12-14 → 2026-05-06，字段 `currency_name, borrow_rate, time`
 - Candlestick：374 文件，perpetual 184 / spot 190，2023-07-01 → 2026-05-06，字段 `instrument_name, open, high, low, close, vol, vol_ccy, vol_quote, open_time, confirm`
 - Funding Rate：396 文件，perpetual，2022-03-01 → 2026-05-06，字段 `instrument_name, funding_rate, funding_time`
-- Orderbook：16 文件，spot，2025-01-01 → 2026-05-05，扩展名 `.data` 5 / `.tar.gz` 11，字段 `action, asks, bids, instId, ts`
+- Orderbook：58 文件，perpetual 18 / spot 40，2024-05-20 → 2026-05-05，扩展名 `.data` 5 / `.tar.gz` 23 / `.tar.tar` 30，字段 `action, asks, bids, instId, ts`（可读 `.data` 样本；归档不展开）
 - Trade：1672 文件，perpetual 457 / spot 1215，2021-09-01 → 2026-05-06，字段 `instrument_name, trade_id, side, price, size, created_time`
 
 ### 🎯 AlphaTenant 后续数据集形状判断
@@ -313,3 +313,35 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-minimal 
 - `feature-scan` 与 curated minimal 原型仍只是治理证据，不等于数据准入许可。
 - AlphaTenant 后续只能消费 `allow_into_feature_layer=True` 且版本/质量报告匹配的 governed feature/regime/snapshot。
 - 若 Trade / Orderbook 特征未覆盖当前 1m 时间戳，必须以缺失/过期 flag 表示，不允许静默补值或用未来数据回填。
+
+## 里程碑 10：Orderbook `.tar.tar` 归档纳入轻量扫描覆盖
+
+完成时间：2026-05-09
+
+### ✅ 已完成
+
+- 修正 `feature_scan.py` 的 Orderbook 原始文件识别规则。
+- `.tar.tar` 与 `.tar.gz`、`.data`、`.data.txt` 一样纳入 coverage 统计。
+- 归档文件只计入覆盖与日期范围，不在 lightweight scan 中展开。
+- 新增 TDD 单测，验证 `.data` / `.tar.gz` / `.tar.tar` 同时存在时 file count、extension count、date range 与 JSONL sample fields 都正确。
+
+### 📊 当前真实 Raw Source Zone 扫描结果
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli feature-scan
+```
+
+Orderbook 最新统计：
+
+- 文件总数：58
+- market_type_counts：perpetual 18 / spot 40
+- extension_counts：`.data` 5 / `.tar.gz` 23 / `.tar.tar` 30
+- 日期范围：2024-05-20 → 2026-05-05
+- Perpetual 当前样本为归档：`tar.tar_archive_not_expanded`
+- Spot 当前样本可读取 JSONL 字段：`action, asks, bids, instId, ts`
+
+### 🔒 边界
+
+- `.tar.tar` 被识别为 OKX Raw Orderbook coverage，不代表 L2 已完成重建。
+- Lightweight scan 不展开归档、不验证归档内部连续性、不生成可训练 Orderbook feature。
+- 后续若要利用归档，需另建“安全解包 / 抽样审计 / 质量标签”入口，仍不得直接向 AlphaTenant 暴露 raw L2。
