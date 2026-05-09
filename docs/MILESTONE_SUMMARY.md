@@ -752,3 +752,67 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli orderbook-stream-featu
 - 不向 AlphaTenant 暴露 raw L2、临时解压 `.data` 或全量 normalized L2 event。
 - checkpoint 粒度为 source file；失败时重跑该 source file，暂不做 archive 内部 offset resume，避免过度工程化。
 
+
+## 里程碑 16：curated_btc_market_state_5m 从治理 1m 层聚合
+
+完成时间：2026-05-09
+
+### ✅ 已完成
+
+- 新增 `curated-state-5m` CLI，只从已有 `curated_btc_market_state_1m` sample 聚合生成 5m 状态表。
+- 明确 5m 不绕过 1m 质量层，不直接读取 raw candle / raw trade / raw orderbook / intermediate normalized 数据。
+- 5m OHLCV 按 5 条连续 1m 行聚合：open 取首行、high 取最大、low 取最小、close 取末行、volume 求和。
+- Trade 5m 聚合 `trade_count_5m`、`buy_volume_5m`、`sell_volume_5m`、`volume_delta_5m`。
+- Funding / Borrowing / Orderbook 派生状态取 5m 窗口末行的时间因果状态。
+- 继承质量闸门：任一来源 1m 行 `allow_into_feature_layer=False`，派生 5m 行即标记 `source_1m_quality_blocked` 并阻断准入。
+- 保留 `source_1m_row_count`、`source_1m_allowed_row_count`、`source_1m_data_quality_flags`，便于追溯 5m 阻断原因。
+
+### 🧪 TDD 覆盖
+
+新增测试：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m unittest tests.test_curated_state_5m -v
+```
+
+验证点：
+
+- 5m 聚合只基于 `curated_btc_market_state_1m.csv`。
+- OHLCV 与 Trade 5m 聚合结果正确。
+- 来源 1m 中存在 blocked 行时，5m 行必须被阻断。
+- 来源 1m 的质量 flag 会写入 `source_1m_data_quality_flags`。
+
+全量测试：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m compileall -q src tests
+PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
+```
+
+结果：36 tests OK。
+
+### 📊 真实窗口 smoke 验证
+
+命令：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-5m \
+  --source-label target_2024-05-20_to_2024-06-11_with_orderbook \
+  --label target_2024-05-20_to_2024-06-11_with_orderbook_5m
+```
+
+结果：
+
+- source 1m rows：33,120
+- 5m rows：6,624
+- `allow_into_feature_layer=True`：6,474
+- blocked rows：150
+- `allow_into_feature_layer_ratio`：0.9773550725
+- blocking flags：`source_1m_quality_blocked: 150`
+- 输出：`data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=5m/sample=target_2024-05-20_to_2024-06-11_with_orderbook_5m/curated_btc_market_state_5m.csv`
+
+### 🔒 当前边界
+
+- 5m 是从治理后的 1m Feature Layer 聚合，不是新的 raw 数据治理入口。
+- 5m 不修补 1m 的 Orderbook 缺失或 crossed book 阻断；只继承并放大质量边界。
+- 当前按连续 5 行聚合，适合已完成 1m 时间轴治理的样本；若后续需要严格自然 5 分钟边界或跨日边界策略，应在保持 1m 质量继承的前提下单独加测试。

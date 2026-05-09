@@ -250,6 +250,16 @@ def write_json(path: Path, obj: Any) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def as_float(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    return float(value)
+
+
+def is_true(value: Any) -> bool:
+    return value is True or str(value).lower() == "true"
+
+
 def source_date_from_partition(path: Path) -> str | None:
     for part in path.parts:
         if part.startswith("exchange_date_utc8="):
@@ -357,6 +367,119 @@ def run_curated_state_window(root: Path, start_date: str, end_date: str, label: 
         "asof_rule": "join only rows with available_time_ms <= feature_time_ms; trade and orderbook features must match current 1m feature_time_ms",
     }
     summary_path = root / "reports" / "quality" / f"curated_state_window_{label}_summary.json"
+    write_json(summary_path, summary)
+    summary["summary_path"] = str(summary_path)
+    return summary
+
+
+def build_curated_market_state_5m(rows_1m: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate governed 1m curated rows into 5m rows.
+
+    This consumes only curated_btc_market_state_1m rows. It does not read raw
+    candle/trade/orderbook files and does not repair blocked 1m rows. If any
+    source 1m row is blocked, the derived 5m row is blocked too.
+    """
+    sorted_rows = sorted(rows_1m, key=lambda r: as_int(r.get("feature_time_ms"), -1))
+    output: list[dict[str, Any]] = []
+    for i in range(0, len(sorted_rows), 5):
+        chunk = sorted_rows[i:i + 5]
+        if len(chunk) < 5:
+            continue
+        first = chunk[0]
+        last = chunk[-1]
+        allowed_count = sum(1 for row in chunk if is_true(row.get("allow_into_feature_layer")))
+        future_leaks = sum(as_int(row.get("future_leak_violation_count"), 0) for row in chunk)
+        source_flags: list[str] = []
+        for row_1m in chunk:
+            for flag in str(row_1m.get("data_quality_flags", "")).split(";"):
+                if flag and flag not in source_flags:
+                    source_flags.append(flag)
+        flags: list[str] = []
+        if allowed_count != len(chunk):
+            flags.append("source_1m_quality_blocked")
+        if future_leaks:
+            flags.append("source_1m_future_leak_violation")
+        row = {
+            "exchange": last.get("exchange", first.get("exchange", "okx")),
+            "instrument_name": last.get("instrument_name", first.get("instrument_name", "BTC-USDT")),
+            "source_market_type": last.get("source_market_type", first.get("source_market_type", "unknown")),
+            "interval": "5m",
+            "feature_time_ms": as_int(last.get("feature_time_ms")),
+            "feature_time_utc": last.get("feature_time_utc", ""),
+            "available_time_ms": as_int(last.get("available_time_ms") or last.get("feature_time_ms")),
+            "available_time_utc": last.get("available_time_utc", last.get("feature_time_utc", "")),
+            "window_start_feature_time_ms": as_int(first.get("feature_time_ms")),
+            "window_end_feature_time_ms": as_int(last.get("feature_time_ms")),
+            "source_1m_row_count": len(chunk),
+            "source_1m_allowed_row_count": allowed_count,
+            "open": first.get("open", ""),
+            "high": f"{max(as_float(r.get('high')) for r in chunk):g}",
+            "low": f"{min(as_float(r.get('low')) for r in chunk):g}",
+            "close": last.get("close", ""),
+            "vol_base": f"{sum(as_float(r.get('vol_base')) for r in chunk):g}",
+            "vol_quote": f"{sum(as_float(r.get('vol_quote')) for r in chunk):g}",
+            "last_realized_funding_rate": last.get("last_realized_funding_rate", ""),
+            "funding_age_ms": last.get("funding_age_ms", ""),
+            "btc_borrow_rate_raw": last.get("btc_borrow_rate_raw", ""),
+            "btc_borrow_rate_age_ms": last.get("btc_borrow_rate_age_ms", ""),
+            "eth_borrow_rate_raw": last.get("eth_borrow_rate_raw", ""),
+            "eth_borrow_rate_age_ms": last.get("eth_borrow_rate_age_ms", ""),
+            "usdt_borrow_rate_raw": last.get("usdt_borrow_rate_raw", ""),
+            "usdt_borrow_rate_age_ms": last.get("usdt_borrow_rate_age_ms", ""),
+            "trade_count_5m": f"{sum(as_int(r.get('trade_count_1m'), 0) for r in chunk):g}",
+            "buy_volume_5m": f"{sum(as_float(r.get('buy_volume_1m')) for r in chunk):g}",
+            "sell_volume_5m": f"{sum(as_float(r.get('sell_volume_1m')) for r in chunk):g}",
+            "volume_delta_5m": f"{sum(as_float(r.get('volume_delta_1m')) for r in chunk):g}",
+            "orderbook_mid_price_last": last.get("orderbook_mid_price_last", ""),
+            "orderbook_spread_abs_last": last.get("orderbook_spread_abs_last", ""),
+            "orderbook_top20_depth_imbalance_last": last.get("orderbook_top20_depth_imbalance_last", ""),
+            "orderbook_feature_time_ms": last.get("orderbook_feature_time_ms", ""),
+            "source_1m_data_quality_flags": ";".join(source_flags),
+            "future_leak_violation_count": future_leaks,
+            "data_quality_flags": ";".join(flags),
+            "missing_or_stale_source_count": len(flags),
+            "overall_data_quality_score": f"{max(0.0, 1.0 - 0.1 * len(flags) - 0.5 * future_leaks):.4f}",
+            "allow_into_feature_layer": future_leaks == 0 and not flags,
+            "schema_version": last.get("schema_version", ""),
+            "feature_version": last.get("feature_version", ""),
+            "governance_version": last.get("governance_version", ""),
+        }
+        output.append(row)
+    return output
+
+
+def run_curated_state_5m(root: Path, source_label: str, label: str | None = None) -> dict[str, Any]:
+    label = label or f"{source_label}_5m"
+    source_path = root / "data_lake" / "features" / "exchange=okx" / "dataset_type=curated_btc_market_state" / "interval=1m" / f"sample={source_label}" / "curated_btc_market_state_1m.csv"
+    rows_1m = read_csv_dicts(source_path) if source_path.exists() else []
+    rows_5m = build_curated_market_state_5m(rows_1m)
+    out_dir = root / "data_lake" / "features" / "exchange=okx" / "dataset_type=curated_btc_market_state" / "interval=5m" / f"sample={label}"
+    out_path = out_dir / "curated_btc_market_state_5m.csv"
+    if rows_5m:
+        write_csv_rows(out_path, rows_5m, list(rows_5m[0].keys()))
+    allow_count = sum(1 for row in rows_5m if is_true(row.get("allow_into_feature_layer")))
+    blocked_by_source = sum(1 for row in rows_5m if "source_1m_quality_blocked" in str(row.get("data_quality_flags", "")))
+    flags: dict[str, int] = {}
+    for row in rows_5m:
+        for flag in str(row.get("data_quality_flags", "")).split(";"):
+            if flag:
+                flags[flag] = flags.get(flag, 0) + 1
+    summary = {
+        "dataset_type": "curated_btc_market_state_5m",
+        "source_dataset_type": "curated_btc_market_state_1m",
+        "source_label": source_label,
+        "label": label,
+        "source": str(source_path),
+        "source_1m_rows": len(rows_1m),
+        "row_count": len(rows_5m),
+        "allow_into_feature_layer_rows": allow_count,
+        "allow_into_feature_layer_ratio": (allow_count / len(rows_5m)) if rows_5m else 0,
+        "blocked_by_source_1m_quality_rows": blocked_by_source,
+        "data_quality_flag_counts": flags,
+        "output": str(out_path) if rows_5m else None,
+        "aggregation_rule": "aggregate only governed curated_btc_market_state_1m rows; derived 5m row is blocked if any source 1m row is blocked",
+    }
+    summary_path = root / "reports" / "quality" / f"curated_state_5m_{label}_summary.json"
     write_json(summary_path, summary)
     summary["summary_path"] = str(summary_path)
     return summary
