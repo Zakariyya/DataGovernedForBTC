@@ -503,3 +503,18 @@ snapshots/exchange=okx/instrument=BTC-USDT/interval=1m/snapshot_id=okx_btc_marke
 - AlphaTenant 只应读取 snapshot 目录内的治理产物，并按 `feature_contract.md` 过滤。
 - 2025-2026 验证集隔离规则仍然有效；当前 snapshot 不改变任何训练/验证 cutoff 约束。
 
+### 🧭 下一步数据补齐清单
+
+已生成本地 gap/quality review 报告：
+
+```text
+reports/gap/orderbook_gap_and_quality_review_2024-05-20_to_2024-06-11.json
+reports/gap/orderbook_gap_and_quality_review_2024-05-20_to_2024-06-11.md
+```
+
+优先级：
+
+1. 高优先级补齐真实 OKX Spot BTC-USDT Orderbook `2024-05-19`：当前本地不存在该文件，导致目标窗口开头 UTC `2024-05-19 16:01` 至 `2024-05-20 00:00` 之间的 Orderbook feature 缺失。
+2. 质量复核日期：`2024-05-22`、`2024-05-23`、`2024-06-04`、`2024-06-05`，原因分别为 crossed book 或分钟特征不足 1440。
+3. 若补不到真实 OKX 原始文件，必须保留缺失与阻断；禁止合成、插值、未来 forward-fill 或使用其他交易所替代。
+
