@@ -43,6 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
     cur_win_parser.add_argument("--start-date", required=True, help="Inclusive exchange_date_utc8 start, YYYY-MM-DD.")
     cur_win_parser.add_argument("--end-date", required=True, help="Inclusive exchange_date_utc8 end, YYYY-MM-DD.")
     cur_win_parser.add_argument("--label", default=None, help="Output sample label. Default: start_to_end.")
+    snap_parser = sub.add_parser("snapshot-admission", help="Package a curated sample into an AlphaTenant-readable governed snapshot.")
+    snap_parser.add_argument("--label", required=True, help="Curated sample label, e.g. target_2024-05-20_to_2024-06-11_with_orderbook.")
+    snap_parser.add_argument("--snapshot-id", default=None, help="Stable snapshot id. Default: okx_btc_market_state_1m_v0_1_<label>.")
     sub.add_parser("feature-scan", help="Scan raw feature points and output AlphaTenant target dataset shape report.")
     sub.add_parser("audit-okx", help="Audit current OKX historical data directory.")
     return parser
@@ -101,6 +104,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "curated-state-window":
         from datagovernedforbtc.curated_state import run_curated_state_window
         print(json.dumps(run_curated_state_window(root, start_date=args.start_date, end_date=args.end_date, label=args.label), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "snapshot-admission":
+        from datagovernedforbtc.snapshot import run_snapshot_admission
+        print(json.dumps(run_snapshot_admission(root, label=args.label, snapshot_id=args.snapshot_id), ensure_ascii=False, indent=2))
         return 0
     if args.command == "feature-scan":
         from datagovernedforbtc.feature_scan import run_feature_scan

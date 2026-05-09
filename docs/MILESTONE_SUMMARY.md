@@ -447,4 +447,59 @@ Curated with Orderbook 结果：
 
 - 当前已满足 AlphaTenant 需要“治理后的 Orderbook 1m 特征”的最低闭环：解析、质量报告、分钟聚合、时间对齐、curated quality gate。
 - 但这仍不是严格可证明的全深度 L2 重建。后续若要提升等级，需要独立补充 sequence/checksum 或交易所官方可验证连续性机制，否则必须保留 `best_effort_reconstructed_without_sequence_checksum` 标签。
+## 里程碑 12：AlphaTenant Snapshot v0.1 准入封装
+
+完成时间：2026-05-09
+
+### ✅ 已完成
+
+- 新增 `snapshot-admission` CLI，将已经治理完成的 `curated_btc_market_state_1m` sample 封装为 AlphaTenant 可读取的版本化 Snapshot Layer。
+- 新增 TDD 测试 `tests/test_snapshot_admission.py`，验证 snapshot 必须包含：
+  - `curated_btc_market_state_1m.csv`
+  - `data_admission_report.json`
+  - `source_manifest.json`
+  - `quality_summary.json`
+  - `schema.json`
+  - `feature_contract.md`
+  - `forbidden_raw_access_policy.md`
+  - `snapshot_summary.json`
+- Snapshot 不包含 raw OKX 数据，不包含临时解压 `.data`，只复制治理后的 curated feature CSV 与质量摘要。
+- `source_manifest.json` 记录 curated source 与 copied snapshot 文件的 sha256，确保可追溯、可复验。
+- `feature_contract.md` 明确 AlphaTenant 必须过滤 `allow_into_feature_layer == True`，治理列不能作为模型特征。
+- `forbidden_raw_access_policy.md` 明确 AlphaTenant 禁止读取 `okx/` Raw Source Zone、raw tick、raw L2、临时解压 `.data`、无版本化 CSV 或无质量闸门特征。
+
+### 📦 当前 Snapshot
+
+生成命令：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli snapshot-admission \
+  --label target_2024-05-20_to_2024-06-11_with_orderbook \
+  --snapshot-id okx_btc_market_state_1m_v0_1_20240520_20240611_with_orderbook
+```
+
+Snapshot 路径：
+
+```text
+snapshots/exchange=okx/instrument=BTC-USDT/interval=1m/snapshot_id=okx_btc_market_state_1m_v0_1_20240520_20240611_with_orderbook/
+```
+
+准入摘要：
+
+- rows：33,120
+- `allow_into_feature_layer=True`：32,404
+- blocked rows：716
+- `future_leak_violation_count`：0
+- blocking flags：
+  - `orderbook_feature_missing`: 649
+  - `orderbook_crossed_book`: 67
+- AlphaTenant readiness：`admitted_with_row_level_quality_filter`
+- 必须过滤：`allow_into_feature_layer == True`
+- Orderbook 边界：`best_effort_reconstructed_without_sequence_checksum`
+
+### 🔒 使用边界
+
+- 这是数据准入产物，不是策略、训练或回测结论。
+- AlphaTenant 只应读取 snapshot 目录内的治理产物，并按 `feature_contract.md` 过滤。
+- 2025-2026 验证集隔离规则仍然有效；当前 snapshot 不改变任何训练/验证 cutoff 约束。
 
