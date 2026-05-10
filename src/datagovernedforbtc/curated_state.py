@@ -472,6 +472,30 @@ def run_curated_state_window_finalize(root: Path, start_date: str, end_date: str
     day_paths = [curated_1m_sample_dir(root, label) / f"exchange_date_utc8={d}" / "curated_btc_market_state_1m.csv" for d in dates]
     existing_day_paths = [p for p in day_paths if p.exists()]
     missing_dates = [d for d, p in zip(dates, day_paths) if not p.exists()]
+    out_path = curated_1m_sample_dir(root, label) / "curated_btc_market_state_1m.csv"
+    summary_path = root / "reports" / "quality" / f"curated_state_window_{label}_summary.json"
+    if missing_dates:
+        summary = {
+            "dataset_type": "curated_btc_market_state_1m",
+            "window_start": start_date,
+            "window_end": end_date,
+            "label": label,
+            "expected_day_partitions": len(dates),
+            "day_partitions_used": len(existing_day_paths),
+            "missing_day_partitions": missing_dates,
+            "row_count": 0,
+            "allow_into_feature_layer_rows": 0,
+            "allow_into_feature_layer_ratio": 0,
+            "future_leak_violation_count": 0,
+            "missing_or_stale_source_count_distribution": {},
+            "data_quality_flag_counts": {"missing_curated_day_partition": len(missing_dates)},
+            "orderbook_feature_missing_rows": 0,
+            "output": None,
+            "admission_status": "rejected_missing_day_partitions",
+            "asof_rule": "join only rows with available_time_ms <= feature_time_ms; trade and orderbook features must match current 1m feature_time_ms",
+        }
+        write_json(summary_path, summary)
+        raise ValueError(f"missing curated day partitions for {label}: {', '.join(missing_dates)}")
     rows: list[dict[str, Any]] = []
     for path in existing_day_paths:
         rows.extend(read_csv_dicts(path))

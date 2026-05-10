@@ -86,6 +86,19 @@ class CuratedStateDayFinalizeTest(unittest.TestCase):
             with out.open(newline="", encoding="utf-8") as f:
                 rows = list(csv.DictReader(f))
             self.assertEqual([row["close"] for row in rows], ["100.5", "101.5"])
+
+    def test_curated_state_window_finalize_fails_closed_when_any_day_partition_is_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.seed_day(root, "2024-05-20", 60000, close="100.5")
+            run_curated_state_day(root, date="2024-05-20", label="missing_window")
+
+            with self.assertRaisesRegex(ValueError, "missing curated day partitions"):
+                run_curated_state_window_finalize(root, start_date="2024-05-20", end_date="2024-05-21", label="missing_window")
+
+            out = root / "data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=1m/sample=missing_window/curated_btc_market_state_1m.csv"
+            self.assertFalse(out.exists())
+
     def test_curated_state_day_can_asof_join_previous_day_low_frequency_inputs(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
