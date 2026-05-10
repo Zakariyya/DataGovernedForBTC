@@ -3,7 +3,7 @@ import csv
 import tempfile
 import unittest
 
-from datagovernedforbtc.candlestick import process_candlestick_file
+from datagovernedforbtc.candlestick import process_candlestick_file, run_candlestick_minimal
 
 
 class CandlestickGovernanceTest(unittest.TestCase):
@@ -93,6 +93,21 @@ class CandlestickGovernanceTest(unittest.TestCase):
             self.assertIn("conflicting_duplicate_open_time_detected", quality["data_quality_flags"])
             self.assertFalse(quality["allow_into_training"])
             self.assertEqual(normalized, [])
+    def test_blocked_candlestick_run_removes_stale_normalized_outputs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            p = root / "okx" / "Candlesticks" / "Spot" / "2024" / "BTC-USDT-candlesticks-2024-07-18.csv"
+            self.write_candles(p, row_count=1440, confirm="0")
+            run_candlestick_minimal(root)
+            out = root / "data_lake/normalized/exchange=okx/dataset_type=candlestick/market=spot/instrument=BTC-USDT/interval=1m/exchange_date_utc8=2024-07-18/candlestick_normalized.csv"
+            self.assertTrue(out.exists())
+
+            # Rerun with the same source date now blocked by conflicting duplicate rows.
+            self.write_candles(p, row_count=1440, confirm="0", duplicate_exact_count=1, duplicate_conflict=True)
+            summary = run_candlestick_minimal(root)
+
+            self.assertEqual(summary["blocked_count"], 1)
+            self.assertFalse(out.exists())
 
 
 if __name__ == "__main__":

@@ -446,6 +446,8 @@ def run_curated_state_day(root: Path, date: str, label: str | None = None) -> di
     out_path = out_dir / "curated_btc_market_state_1m.csv"
     if rows:
         write_csv_rows(out_path, rows, list(rows[0].keys()))
+    elif out_path.exists():
+        out_path.unlink()
     row_summary = summarize_curated_rows(rows)
     summary = {
         "dataset_type": "curated_btc_market_state_1m",
@@ -475,6 +477,8 @@ def run_curated_state_window_finalize(root: Path, start_date: str, end_date: str
     out_path = curated_1m_sample_dir(root, label) / "curated_btc_market_state_1m.csv"
     summary_path = root / "reports" / "quality" / f"curated_state_window_{label}_summary.json"
     if missing_dates:
+        if out_path.exists():
+            out_path.unlink()
         summary = {
             "dataset_type": "curated_btc_market_state_1m",
             "window_start": start_date,

@@ -91,12 +91,18 @@ class CuratedStateDayFinalizeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self.seed_day(root, "2024-05-20", 60000, close="100.5")
+            self.seed_day(root, "2024-05-21", 120000, close="101.5")
             run_curated_state_day(root, date="2024-05-20", label="missing_window")
+            run_curated_state_day(root, date="2024-05-21", label="missing_window")
+            existing = run_curated_state_window_finalize(root, start_date="2024-05-20", end_date="2024-05-21", label="missing_window")
+            out = Path(existing["output"])
+            self.assertTrue(out.exists())
+            missing_day_out = root / "data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=1m/sample=missing_window/exchange_date_utc8=2024-05-21/curated_btc_market_state_1m.csv"
+            missing_day_out.unlink()
 
             with self.assertRaisesRegex(ValueError, "missing curated day partitions"):
                 run_curated_state_window_finalize(root, start_date="2024-05-20", end_date="2024-05-21", label="missing_window")
 
-            out = root / "data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=1m/sample=missing_window/curated_btc_market_state_1m.csv"
             self.assertFalse(out.exists())
 
     def test_curated_state_day_can_asof_join_previous_day_low_frequency_inputs(self):
@@ -124,6 +130,20 @@ class CuratedStateDayFinalizeTest(unittest.TestCase):
             self.assertEqual(row["last_realized_funding_rate"], "0.009")
             self.assertEqual(row["btc_borrow_rate_raw"], "0.09")
             self.assertEqual(row["allow_into_feature_layer"], "True")
+    def test_curated_state_day_removes_stale_output_when_source_becomes_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.seed_day(root, "2024-05-20", 60000)
+            first = run_curated_state_day(root, date="2024-05-20", label="stale_day")
+            out = Path(first["output"])
+            self.assertTrue(out.exists())
+
+            candle = root / "data_lake/normalized/exchange=okx/dataset_type=candlestick/market=spot/instrument=BTC-USDT/interval=1m/exchange_date_utc8=2024-05-20/candlestick_normalized.csv"
+            candle.unlink()
+            second = run_curated_state_day(root, date="2024-05-20", label="stale_day")
+
+            self.assertIsNone(second["output"])
+            self.assertFalse(out.exists())
 
 
 if __name__ == "__main__":

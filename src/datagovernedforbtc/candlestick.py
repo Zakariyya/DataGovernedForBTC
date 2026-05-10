@@ -305,13 +305,16 @@ def run_candlestick_minimal(root: Path) -> dict[str, Any]:
         write_json(base / "file_manifest.json", manifest)
         qpath = root / "reports" / "quality" / "exchange=okx" / "dataset_type=candlestick" / f"market={market}" / f"instrument={inst}" / f"exchange_date_utc8={source_date}" / "quality_report.json"
         write_json(qpath, quality)
+        nbase = root / "data_lake" / "normalized" / "exchange=okx" / "dataset_type=candlestick" / f"market={market}" / f"instrument={inst}" / "interval=1m" / f"exchange_date_utc8={source_date}"
+        parquet_path = nbase / "candlestick_normalized.parquet"
+        csv_path = nbase / "candlestick_normalized.csv"
         if normalized:
-            nbase = root / "data_lake" / "normalized" / "exchange=okx" / "dataset_type=candlestick" / f"market={market}" / f"instrument={inst}" / "interval=1m" / f"exchange_date_utc8={source_date}"
-            parquet_path = nbase / "candlestick_normalized.parquet"
-            csv_path = nbase / "candlestick_normalized.csv"
             write_parquet_rows(parquet_path, normalized)
             write_csv_rows(csv_path, normalized, list(normalized[0].keys()))
         else:
+            for stale_path in (parquet_path, csv_path):
+                if stale_path.exists():
+                    stale_path.unlink()
             parquet_path = None
             csv_path = None
         all_quality.append(quality)
