@@ -35,11 +35,12 @@ LOG="$LOG_DIR/v02_orderbook_contiguous_20240520_20241108_$(date -u +%Y%m%dT%H%M%
     --instrument BTC-USDT \
     --resume
 
-  echo "[STEP] curated-state-window 1m"
+  echo "[STEP] curated-state-window 1m (date-partitioned workers=4)"
   PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-window \
     --start-date 2024-05-20 \
     --end-date 2024-11-08 \
-    --label target_2024-05-20_to_2024-11-08_with_orderbook
+    --label target_2024-05-20_to_2024-11-08_with_orderbook \
+    --workers 4
 
   echo "[STEP] curated-state-5m"
   PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-5m \
