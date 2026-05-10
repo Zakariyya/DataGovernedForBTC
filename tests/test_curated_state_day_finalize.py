@@ -86,6 +86,31 @@ class CuratedStateDayFinalizeTest(unittest.TestCase):
             with out.open(newline="", encoding="utf-8") as f:
                 rows = list(csv.DictReader(f))
             self.assertEqual([row["close"] for row in rows], ["100.5", "101.5"])
+    def test_curated_state_day_can_asof_join_previous_day_low_frequency_inputs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            # Seed current day candle/trade/orderbook only, then provide funding/borrow from previous day.
+            self.seed_day(root, "2024-05-20", 60000)
+            current_funding = root / "data_lake/normalized/exchange=okx/dataset_type=funding_rate/market=perpetual/exchange_date_utc8=2024-05-20/funding_normalized.csv"
+            current_borrow = root / "data_lake/normalized/exchange=okx/dataset_type=borrowing_rate/market=spot/exchange_date_utc8=2024-05-20/borrowing_normalized.csv"
+            current_funding.unlink()
+            current_borrow.unlink()
+            self.write_csv(root / "data_lake/normalized/exchange=okx/dataset_type=funding_rate/market=perpetual/exchange_date_utc8=2024-05-19/funding_normalized.csv", [
+                {"instrument_name": "BTC-USDT-SWAP", "available_time_ms": 0, "realized_funding_rate": "0.009", "funding_interval_ms": "28800000", "data_quality_score": "1.0"}
+            ])
+            self.write_csv(root / "data_lake/normalized/exchange=okx/dataset_type=borrowing_rate/market=spot/exchange_date_utc8=2024-05-19/borrowing_normalized.csv", [
+                {"currency_name": "BTC", "available_time_ms": 0, "borrow_rate_raw": "0.09", "data_quality_score": "1.0"},
+                {"currency_name": "ETH", "available_time_ms": 0, "borrow_rate_raw": "0.08", "data_quality_score": "1.0"},
+                {"currency_name": "USDT", "available_time_ms": 0, "borrow_rate_raw": "0.07", "data_quality_score": "1.0"},
+            ])
+
+            summary = run_curated_state_day(root, date="2024-05-20", label="prev_lowfreq")
+
+            with Path(summary["output"]).open(newline="", encoding="utf-8") as f:
+                row = next(csv.DictReader(f))
+            self.assertEqual(row["last_realized_funding_rate"], "0.009")
+            self.assertEqual(row["btc_borrow_rate_raw"], "0.09")
+            self.assertEqual(row["allow_into_feature_layer"], "True")
 
 
 if __name__ == "__main__":

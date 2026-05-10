@@ -408,6 +408,21 @@ def collect_curated_inputs_for_window(root: Path, start_date: str, end_date: str
     }
 
 
+def collect_curated_inputs_for_day(root: Path, day: str) -> dict[str, list[Path]]:
+    previous_day = (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+    candle_paths = collect_curated_inputs_for_window(root, day, day)["candle_paths"]
+    trade_paths = collect_curated_inputs_for_window(root, day, day)["trade_paths"]
+    orderbook_paths = collect_curated_inputs_for_window(root, day, day)["orderbook_paths"]
+    low_frequency_paths = collect_curated_inputs_for_window(root, previous_day, day)
+    return {
+        "candle_paths": candle_paths,
+        "funding_paths": low_frequency_paths["funding_paths"],
+        "borrowing_paths": low_frequency_paths["borrowing_paths"],
+        "trade_paths": trade_paths,
+        "orderbook_paths": orderbook_paths,
+    }
+
+
 def build_curated_rows_from_paths(paths: dict[str, list[Path]]) -> list[dict[str, Any]]:
     candles = load_csvs(paths["candle_paths"])
     funding = load_csvs(paths["funding_paths"])
@@ -425,7 +440,7 @@ def build_curated_rows_from_paths(paths: dict[str, list[Path]]) -> list[dict[str
 
 def run_curated_state_day(root: Path, date: str, label: str | None = None) -> dict[str, Any]:
     label = label or date
-    paths = collect_curated_inputs_for_window(root, date, date)
+    paths = collect_curated_inputs_for_day(root, date)
     rows = build_curated_rows_from_paths(paths)
     out_dir = curated_1m_sample_dir(root, label) / f"exchange_date_utc8={date}"
     out_path = out_dir / "curated_btc_market_state_1m.csv"
