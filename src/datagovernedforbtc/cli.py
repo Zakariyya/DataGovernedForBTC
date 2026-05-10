@@ -62,6 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
     cur_win_parser.add_argument("--start-date", required=True, help="Inclusive exchange_date_utc8 start, YYYY-MM-DD.")
     cur_win_parser.add_argument("--end-date", required=True, help="Inclusive exchange_date_utc8 end, YYYY-MM-DD.")
     cur_win_parser.add_argument("--label", default=None, help="Output sample label. Default: start_to_end.")
+    cur_win_parser.add_argument("--workers", type=int, default=1, help="Number of date-partition worker processes for curated-state-window.")
+    cur_day_parser = sub.add_parser("curated-state-day", help="Build one date partition for curated_btc_market_state_1m.")
+    cur_day_parser.add_argument("--date", required=True, help="exchange_date_utc8 day, YYYY-MM-DD.")
+    cur_day_parser.add_argument("--label", default=None, help="Output sample label. Default: date.")
+    cur_fin_parser = sub.add_parser("curated-state-window-finalize", help="Merge existing curated-state-day partitions and write window summary.")
+    cur_fin_parser.add_argument("--start-date", required=True, help="Inclusive exchange_date_utc8 start, YYYY-MM-DD.")
+    cur_fin_parser.add_argument("--end-date", required=True, help="Inclusive exchange_date_utc8 end, YYYY-MM-DD.")
+    cur_fin_parser.add_argument("--label", default=None, help="Output sample label. Default: start_to_end.")
     cur_5m_parser = sub.add_parser("curated-state-5m", help="Aggregate governed curated_btc_market_state_1m sample into 5m rows.")
     cur_5m_parser.add_argument("--source-label", required=True, help="Existing 1m curated sample label to aggregate.")
     cur_5m_parser.add_argument("--label", default=None, help="Output 5m sample label. Default: <source-label>_5m.")
@@ -133,7 +141,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "curated-state-window":
         from datagovernedforbtc.curated_state import run_curated_state_window
-        print(json.dumps(run_curated_state_window(root, start_date=args.start_date, end_date=args.end_date, label=args.label), ensure_ascii=False, indent=2))
+        print(json.dumps(run_curated_state_window(root, start_date=args.start_date, end_date=args.end_date, label=args.label, workers=args.workers), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "curated-state-day":
+        from datagovernedforbtc.curated_state import run_curated_state_day
+        print(json.dumps(run_curated_state_day(root, date=args.date, label=args.label), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "curated-state-window-finalize":
+        from datagovernedforbtc.curated_state import run_curated_state_window_finalize
+        print(json.dumps(run_curated_state_window_finalize(root, start_date=args.start_date, end_date=args.end_date, label=args.label), ensure_ascii=False, indent=2))
         return 0
     if args.command == "curated-state-5m":
         from datagovernedforbtc.curated_state import run_curated_state_5m

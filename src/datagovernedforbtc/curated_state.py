@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import json
+from datetime import date, timedelta
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,41 @@ def asof_row(rows: list[dict[str, Any]], t: int, time_field: str = "available_ti
         else:
             break
     return candidate
+
+
+def date_range_inclusive(start_date: str, end_date: str) -> list[str]:
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    if end < start:
+        raise ValueError(f"end_date before start_date: {start_date} > {end_date}")
+    values: list[str] = []
+    current = start
+    while current <= end:
+        values.append(current.isoformat())
+        current += timedelta(days=1)
+    return values
+
+
+def build_asof_index(rows: list[dict[str, Any]], time_field: str = "available_time_ms") -> tuple[list[int], list[dict[str, Any]]]:
+    ordered = sorted(rows, key=lambda r: as_int(r.get(time_field), -1))
+    return [as_int(r.get(time_field), -1) for r in ordered], ordered
+
+
+def asof_indexed(times: list[int], rows: list[dict[str, Any]], t: int) -> dict[str, Any] | None:
+    # Binary search keeps curated joins O(N log M) instead of repeatedly scanning
+    # large full-window feature lists for every 1m candle.
+    lo = 0
+    hi = len(times)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if times[mid] <= t:
+            lo = mid + 1
+        else:
+            hi = mid
+    index = lo - 1
+    if index < 0:
+        return None
+    return rows[index]
 
 
 def finalize_quality_gate(row: dict[str, Any]) -> None:
@@ -97,23 +134,34 @@ def build_curated_market_state_1m(
     """
     versions = GovernanceVersions()
     funding_rows = [r for r in (funding_rows or []) if str(r.get("instrument_name", "BTC-USDT-SWAP")) in {"", "BTC-USDT-SWAP"}]
-    funding_rows = sorted(funding_rows, key=lambda r: as_int(r.get("available_time_ms"), -1))
+    funding_times, funding_rows = build_asof_index(funding_rows, "available_time_ms")
     borrowing_rows = sorted(borrowing_rows or [], key=lambda r: (str(r.get("currency_name", "")), as_int(r.get("available_time_ms"), -1)))
     trade_feature_rows = sorted(trade_feature_rows or [], key=lambda r: as_int(r.get("available_time_ms"), -1))
+    trade_by_feature_time = {
+        as_int(r.get("feature_time_ms") or r.get("available_time_ms"), -1): r
+        for r in trade_feature_rows
+    }
     orderbook_required = orderbook_feature_rows is not None
     orderbook_feature_rows = sorted(orderbook_feature_rows or [], key=lambda r: as_int(r.get("available_time_ms"), -1))
+    orderbook_by_feature_time = {
+        as_int(r.get("feature_time_ms") or r.get("available_time_ms"), -1): r
+        for r in orderbook_feature_rows
+    }
     candles_sorted = sorted(candles, key=lambda r: as_int(r.get("available_time_ms") or r.get("close_time_ms"), -1))
 
-    borrow_by_currency: dict[str, list[dict[str, Any]]] = {}
+    borrow_groups: dict[str, list[dict[str, Any]]] = {}
     for row in borrowing_rows:
-        borrow_by_currency.setdefault(str(row.get("currency_name", "")).upper(), []).append(row)
+        borrow_groups.setdefault(str(row.get("currency_name", "")).upper(), []).append(row)
+    borrow_by_currency: dict[str, tuple[list[int], list[dict[str, Any]]]] = {
+        ccy: build_asof_index(rows, "available_time_ms") for ccy, rows in borrow_groups.items()
+    }
 
     output: list[dict[str, Any]] = []
     for candle in candles_sorted:
         feature_time = as_int(candle.get("close_time_ms") or candle.get("available_time_ms"))
-        funding = asof_row(funding_rows, feature_time)
-        trade = asof_row(trade_feature_rows, feature_time)
-        orderbook = asof_row(orderbook_feature_rows, feature_time)
+        funding = asof_indexed(funding_times, funding_rows, feature_time)
+        trade = trade_by_feature_time.get(feature_time)
+        orderbook = orderbook_by_feature_time.get(feature_time)
         row: dict[str, Any] = {
             "exchange": candle.get("exchange", "okx"),
             "instrument_name": candle.get("instrument_name", "BTC-USDT"),
@@ -180,7 +228,8 @@ def build_curated_market_state_1m(
                 "funding_quality_score": funding.get("data_quality_score", ""),
             })
         for ccy in ("BTC", "ETH", "USDT"):
-            b = asof_row(borrow_by_currency.get(ccy, []), feature_time)
+            borrow_times, borrow_rows = borrow_by_currency.get(ccy, ([], []))
+            b = asof_indexed(borrow_times, borrow_rows, feature_time)
             if b is not None:
                 b_time = as_int(b.get("available_time_ms"), feature_time)
                 row[f"{ccy.lower()}_borrow_rate_raw"] = b.get("borrow_rate_raw", "")
@@ -293,8 +342,36 @@ def prefer_parquet_by_partition(paths: list[Path]) -> list[Path]:
     return sorted(no_date + list(by_date.values()))
 
 
-def run_curated_state_window(root: Path, start_date: str, end_date: str, label: str | None = None) -> dict[str, Any]:
-    label = label or f"{start_date}_to_{end_date}"
+def curated_1m_sample_dir(root: Path, label: str) -> Path:
+    return root / "data_lake" / "features" / "exchange=okx" / "dataset_type=curated_btc_market_state" / "interval=1m" / f"sample={label}"
+
+
+def summarize_curated_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    allow_count = sum(1 for r in rows if is_true(r.get("allow_into_feature_layer")))
+    future_leak_count = sum(as_int(r.get("future_leak_violation_count"), 0) for r in rows)
+    flags: dict[str, int] = {}
+    missing_counts: dict[str, int] = {}
+    orderbook_missing_count = 0
+    for row in rows:
+        if row.get("orderbook_feature_missing_reason"):
+            orderbook_missing_count += 1
+        m = str(row.get("missing_or_stale_source_count", "0"))
+        missing_counts[m] = missing_counts.get(m, 0) + 1
+        for flag in str(row.get("data_quality_flags", "")).split(";"):
+            if flag:
+                flags[flag] = flags.get(flag, 0) + 1
+    return {
+        "row_count": len(rows),
+        "allow_into_feature_layer_rows": allow_count,
+        "allow_into_feature_layer_ratio": (allow_count / len(rows)) if rows else 0,
+        "future_leak_violation_count": future_leak_count,
+        "missing_or_stale_source_count_distribution": missing_counts,
+        "data_quality_flag_counts": flags,
+        "orderbook_feature_missing_rows": orderbook_missing_count,
+    }
+
+
+def collect_curated_inputs_for_window(root: Path, start_date: str, end_date: str) -> dict[str, list[Path]]:
     candle_paths = filter_paths_by_date(
         list((root / "data_lake" / "normalized" / "exchange=okx" / "dataset_type=candlestick" / "market=spot" / "instrument=BTC-USDT" / "interval=1m").rglob("candlestick_normalized.csv")),
         start_date,
@@ -322,53 +399,108 @@ def run_curated_state_window(root: Path, start_date: str, end_date: str, label: 
         start_date,
         end_date,
     ))
-    candles = load_csvs(candle_paths)
-    funding = load_csvs(funding_paths)
-    borrowing = load_csvs(borrowing_paths)
-    trades = load_csvs(trade_paths)
-    orderbooks = load_csvs(orderbook_paths)
-    rows = build_curated_market_state_1m(candles, funding, borrowing, trades, orderbook_feature_rows=orderbooks if orderbook_paths else None)
-    out_dir = root / "data_lake" / "features" / "exchange=okx" / "dataset_type=curated_btc_market_state" / "interval=1m" / f"sample={label}"
+    return {
+        "candle_paths": candle_paths,
+        "funding_paths": funding_paths,
+        "borrowing_paths": borrowing_paths,
+        "trade_paths": trade_paths,
+        "orderbook_paths": orderbook_paths,
+    }
+
+
+def build_curated_rows_from_paths(paths: dict[str, list[Path]]) -> list[dict[str, Any]]:
+    candles = load_csvs(paths["candle_paths"])
+    funding = load_csvs(paths["funding_paths"])
+    borrowing = load_csvs(paths["borrowing_paths"])
+    trades = load_csvs(paths["trade_paths"])
+    orderbooks = load_csvs(paths["orderbook_paths"])
+    return build_curated_market_state_1m(
+        candles,
+        funding,
+        borrowing,
+        trades,
+        orderbook_feature_rows=orderbooks if paths["orderbook_paths"] else None,
+    )
+
+
+def run_curated_state_day(root: Path, date: str, label: str | None = None) -> dict[str, Any]:
+    label = label or date
+    paths = collect_curated_inputs_for_window(root, date, date)
+    rows = build_curated_rows_from_paths(paths)
+    out_dir = curated_1m_sample_dir(root, label) / f"exchange_date_utc8={date}"
     out_path = out_dir / "curated_btc_market_state_1m.csv"
     if rows:
         write_csv_rows(out_path, rows, list(rows[0].keys()))
+    row_summary = summarize_curated_rows(rows)
+    summary = {
+        "dataset_type": "curated_btc_market_state_1m",
+        "date": date,
+        "label": label,
+        "candle_files_used": len(paths["candle_paths"]),
+        "funding_files_used": len(paths["funding_paths"]),
+        "borrowing_files_used": len(paths["borrowing_paths"]),
+        "trade_feature_files_used": len(paths["trade_paths"]),
+        "orderbook_feature_files_used": len(paths["orderbook_paths"]),
+        **row_summary,
+        "output": str(out_path) if rows else None,
+        "asof_rule": "join only rows with available_time_ms <= feature_time_ms; trade and orderbook features must match current 1m feature_time_ms",
+    }
+    summary_path = root / "reports" / "quality" / f"curated_state_day_{label}_{date}_summary.json"
+    write_json(summary_path, summary)
+    summary["summary_path"] = str(summary_path)
+    return summary
 
-    allow_count = sum(1 for r in rows if r.get("allow_into_feature_layer") is True or str(r.get("allow_into_feature_layer")) == "True")
-    future_leak_count = sum(as_int(r.get("future_leak_violation_count"), 0) for r in rows)
-    flags: dict[str, int] = {}
-    missing_counts: dict[str, int] = {}
-    orderbook_missing_count = 0
-    for row in rows:
-        if row.get("orderbook_feature_missing_reason"):
-            orderbook_missing_count += 1
-        m = str(row.get("missing_or_stale_source_count", "0"))
-        missing_counts[m] = missing_counts.get(m, 0) + 1
-        for flag in str(row.get("data_quality_flags", "")).split(";"):
-            if flag:
-                flags[flag] = flags.get(flag, 0) + 1
+
+def run_curated_state_window_finalize(root: Path, start_date: str, end_date: str, label: str | None = None) -> dict[str, Any]:
+    label = label or f"{start_date}_to_{end_date}"
+    dates = date_range_inclusive(start_date, end_date)
+    day_paths = [curated_1m_sample_dir(root, label) / f"exchange_date_utc8={d}" / "curated_btc_market_state_1m.csv" for d in dates]
+    existing_day_paths = [p for p in day_paths if p.exists()]
+    missing_dates = [d for d, p in zip(dates, day_paths) if not p.exists()]
+    rows: list[dict[str, Any]] = []
+    for path in existing_day_paths:
+        rows.extend(read_csv_dicts(path))
+    rows = sorted(rows, key=lambda r: as_int(r.get("feature_time_ms"), -1))
+    out_path = curated_1m_sample_dir(root, label) / "curated_btc_market_state_1m.csv"
+    if rows:
+        write_csv_rows(out_path, rows, list(rows[0].keys()))
+    row_summary = summarize_curated_rows(rows)
     summary = {
         "dataset_type": "curated_btc_market_state_1m",
         "window_start": start_date,
         "window_end": end_date,
         "label": label,
-        "candle_files_used": len(candle_paths),
-        "funding_files_used": len(funding_paths),
-        "borrowing_files_used": len(borrowing_paths),
-        "trade_feature_files_used": len(trade_paths),
-        "orderbook_feature_files_used": len(orderbook_paths),
-        "row_count": len(rows),
-        "allow_into_feature_layer_rows": allow_count,
-        "allow_into_feature_layer_ratio": (allow_count / len(rows)) if rows else 0,
-        "future_leak_violation_count": future_leak_count,
-        "missing_or_stale_source_count_distribution": missing_counts,
-        "data_quality_flag_counts": flags,
-        "orderbook_feature_missing_rows": orderbook_missing_count,
+        "expected_day_partitions": len(dates),
+        "day_partitions_used": len(existing_day_paths),
+        "missing_day_partitions": missing_dates,
+        **row_summary,
         "output": str(out_path) if rows else None,
         "asof_rule": "join only rows with available_time_ms <= feature_time_ms; trade and orderbook features must match current 1m feature_time_ms",
     }
     summary_path = root / "reports" / "quality" / f"curated_state_window_{label}_summary.json"
     write_json(summary_path, summary)
     summary["summary_path"] = str(summary_path)
+    return summary
+
+
+def run_curated_state_window_day_worker(args: tuple[Path, str, str]) -> dict[str, Any]:
+    root, day, label = args
+    return run_curated_state_day(root, date=day, label=label)
+
+
+def run_curated_state_window(root: Path, start_date: str, end_date: str, label: str | None = None, workers: int = 1) -> dict[str, Any]:
+    label = label or f"{start_date}_to_{end_date}"
+    dates = date_range_inclusive(start_date, end_date)
+    if workers <= 1 or len(dates) <= 1:
+        day_summaries = [run_curated_state_day(root, date=d, label=label) for d in dates]
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            day_summaries = list(pool.map(run_curated_state_window_day_worker, [(root, d, label) for d in dates]))
+    summary = run_curated_state_window_finalize(root, start_date=start_date, end_date=end_date, label=label)
+    for key in ("candle_files_used", "funding_files_used", "borrowing_files_used", "trade_feature_files_used", "orderbook_feature_files_used"):
+        summary[key] = sum(as_int(s.get(key), 0) for s in day_summaries)
+    summary["workers"] = workers
+    summary["day_summaries"] = [s["summary_path"] for s in day_summaries]
     return summary
 
 
