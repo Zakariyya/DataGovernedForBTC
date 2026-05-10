@@ -39,6 +39,9 @@ class CandlestickQuality:
     missing_columns: list[str]
     extra_columns: list[str]
     duplicate_open_time_count: int
+    exact_duplicate_open_time_count: int
+    conflicting_duplicate_open_time_count: int
+    deduplicated_row_count: int
     out_of_order_time_count: int
     gap_count: int
     first_gaps: list[dict[str, Any]]
@@ -86,6 +89,23 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
         extra_columns = [c for c in header if c not in expected]
         if missing_columns:
             raise ValueError(f"missing columns: {missing_columns}")
+        raw_row_count = len(rows)
+        rows_by_open_time: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            rows_by_open_time.setdefault(str(row["open_time"]), []).append(row)
+        deduped_rows: list[dict[str, Any]] = []
+        exact_duplicate_open_time_count = 0
+        conflicting_duplicate_open_time_count = 0
+        for open_time in sorted(rows_by_open_time, key=lambda x: int(x)):
+            grouped = rows_by_open_time[open_time]
+            first = grouped[0]
+            if len(grouped) > 1:
+                if all(row == first for row in grouped[1:]):
+                    exact_duplicate_open_time_count += len(grouped) - 1
+                else:
+                    conflicting_duplicate_open_time_count += len(grouped) - 1
+            deduped_rows.append(first)
+        rows_for_quality = deduped_rows if exact_duplicate_open_time_count and not conflicting_duplicate_open_time_count else rows
         normalized: list[dict[str, Any]] = []
         normalized_candidates: list[dict[str, Any]] = []
         open_times: list[int] = []
@@ -94,7 +114,7 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
         ohlc_invalid = 0
         neg_vol = 0
         instruments = set()
-        for r in rows:
+        for r in rows_for_quality:
             inst = r["instrument_name"]
             instruments.add(inst)
             ot = int(r["open_time"])
@@ -156,11 +176,12 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
             diff = cur - prev
             if diff != 60_000:
                 gaps.append({"previous_open_time_ms": prev, "current_open_time_ms": cur, "gap_ms": diff})
-        row_count = len(rows)
+        row_count = raw_row_count
+        deduplicated_row_count = len(rows_for_quality)
         min_ms = min(open_times) if open_times else None
         max_ms = max(open_times) if open_times else None
         inst_name = sorted(instruments)[0] if instruments else None
-        base_integrity_ok = bool(row_count == 1440 and not gaps and duplicates == 0 and ohlc_invalid == 0 and neg_vol == 0)
+        base_integrity_ok = bool(deduplicated_row_count == 1440 and not gaps and duplicates == 0 and conflicting_duplicate_open_time_count == 0 and ohlc_invalid == 0 and neg_vol == 0)
         quality_flags: list[str] = []
         if confirm_0 == 0:
             source_archive_confirm_policy = "strict_confirm_1"
@@ -173,8 +194,12 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
         else:
             source_archive_confirm_policy = "mixed_confirm_values_unresolved"
             quality_flags.append("mixed_confirm_values")
-        if row_count != 1440:
+        if deduplicated_row_count != 1440:
             quality_flags.append("row_count_not_1440")
+        if exact_duplicate_open_time_count:
+            quality_flags.append("exact_duplicate_open_time_deduplicated")
+        if conflicting_duplicate_open_time_count:
+            quality_flags.append("conflicting_duplicate_open_time_detected")
         if gaps:
             quality_flags.append("time_gap_detected")
         if duplicates:
@@ -215,7 +240,7 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
             exchange_date_utc8_min=exchange_date_utc8_from_ms(min_ms) if min_ms is not None else None,
             exchange_date_utc8_max=exchange_date_utc8_from_ms(max_ms) if max_ms is not None else None,
             expected_rows_1m=1440,
-            has_expected_1440_rows=(row_count == 1440),
+            has_expected_1440_rows=(deduplicated_row_count == 1440),
             confirm_1_count=confirm_1,
             confirm_0_count=confirm_0,
             confirm_1_ratio=(confirm_1 / row_count) if row_count else None,
@@ -224,6 +249,9 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
             missing_columns=missing_columns,
             extra_columns=extra_columns,
             duplicate_open_time_count=duplicates,
+            exact_duplicate_open_time_count=exact_duplicate_open_time_count,
+            conflicting_duplicate_open_time_count=conflicting_duplicate_open_time_count,
+            deduplicated_row_count=deduplicated_row_count,
             out_of_order_time_count=out_of_order,
             gap_count=len(gaps),
             first_gaps=gaps[:20],
@@ -252,6 +280,7 @@ def process_candlestick_file(path: Path, root: Path) -> tuple[dict[str, Any], di
             source_file_date=source_file_date, exchange_date_utc8_min=None, exchange_date_utc8_max=None,
             expected_rows_1m=1440, has_expected_1440_rows=False, confirm_1_count=0, confirm_0_count=0,
             confirm_1_ratio=None, source_archive_confirm_policy="parse_error", data_quality_flags="parse_error", missing_columns=[], extra_columns=[], duplicate_open_time_count=0,
+            exact_duplicate_open_time_count=0, conflicting_duplicate_open_time_count=0, deduplicated_row_count=0,
             out_of_order_time_count=0, gap_count=0, first_gaps=[], ohlc_invalid_count=0, negative_volume_count=0,
             allow_into_training=False, data_quality_score=0.0)
         return manifest, asdict(quality), []

@@ -7,26 +7,33 @@ from datagovernedforbtc.candlestick import process_candlestick_file
 
 
 class CandlestickGovernanceTest(unittest.TestCase):
-    def write_candles(self, path: Path, row_count: int = 1440, confirm: str = "0") -> None:
+    def write_candles(self, path: Path, row_count: int = 1440, confirm: str = "0", duplicate_exact_count: int = 0, duplicate_conflict: bool = False) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         start_ms = 1716134400000
+        rows = []
+        for i in range(row_count):
+            px = 66800 + i * 0.1
+            rows.append([
+                "BTC-USDT",
+                f"{px:.1f}",
+                f"{px + 2:.1f}",
+                f"{px - 2:.1f}",
+                f"{px + 0.5:.1f}",
+                "1.0",
+                "66800.0",
+                "66800.0",
+                str(start_ms + i * 60000),
+                confirm,
+            ])
+        for i in range(duplicate_exact_count):
+            dup = list(rows[i])
+            if duplicate_conflict:
+                dup[4] = "99999.9"
+            rows.append(dup)
         with path.open("w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["instrument_name", "open", "high", "low", "close", "vol", "vol_ccy", "vol_quote", "open_time", "confirm"])
-            for i in range(row_count):
-                px = 66800 + i * 0.1
-                w.writerow([
-                    "BTC-USDT",
-                    f"{px:.1f}",
-                    f"{px + 2:.1f}",
-                    f"{px - 2:.1f}",
-                    f"{px + 0.5:.1f}",
-                    "1.0",
-                    "66800.0",
-                    "66800.0",
-                    str(start_ms + i * 60000),
-                    confirm,
-                ])
+            w.writerows(rows)
 
     def test_complete_historical_archive_confirm_0_is_policy_accepted_without_rewriting_confirm(self):
         with tempfile.TemporaryDirectory() as td:
@@ -57,6 +64,33 @@ class CandlestickGovernanceTest(unittest.TestCase):
 
             self.assertEqual(quality["source_archive_confirm_policy"], "unresolved_confirm_0")
             self.assertIn("confirm_0_unresolved", quality["data_quality_flags"])
+            self.assertFalse(quality["allow_into_training"])
+            self.assertEqual(normalized, [])
+    def test_exact_duplicate_candles_are_deduplicated_with_quality_flag(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            p = root / "okx" / "Candlesticks" / "Spot" / "2024" / "BTC-USDT-candlesticks-2024-06-25.csv"
+            self.write_candles(p, row_count=1440, confirm="0", duplicate_exact_count=45)
+
+            _, quality, normalized = process_candlestick_file(p, root)
+
+            self.assertEqual(quality["row_count"], 1485)
+            self.assertEqual(quality["deduplicated_row_count"], 1440)
+            self.assertEqual(quality["exact_duplicate_open_time_count"], 45)
+            self.assertIn("exact_duplicate_open_time_deduplicated", quality["data_quality_flags"])
+            self.assertTrue(quality["allow_into_training"])
+            self.assertEqual(len(normalized), 1440)
+
+    def test_conflicting_duplicate_candles_remain_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            p = root / "okx" / "Candlesticks" / "Spot" / "2024" / "BTC-USDT-candlesticks-2024-06-25.csv"
+            self.write_candles(p, row_count=1440, confirm="0", duplicate_exact_count=1, duplicate_conflict=True)
+
+            _, quality, normalized = process_candlestick_file(p, root)
+
+            self.assertIn("duplicate_open_time_detected", quality["data_quality_flags"])
+            self.assertIn("conflicting_duplicate_open_time_detected", quality["data_quality_flags"])
             self.assertFalse(quality["allow_into_training"])
             self.assertEqual(normalized, [])
 
