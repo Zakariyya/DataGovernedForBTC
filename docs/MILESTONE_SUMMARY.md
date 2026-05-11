@@ -816,3 +816,85 @@ PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli curated-state-5m \
 - 5m 是从治理后的 1m Feature Layer 聚合，不是新的 raw 数据治理入口。
 - 5m 不修补 1m 的 Orderbook 缺失或 crossed book 阻断；只继承并放大质量边界。
 - 当前按连续 5 行聚合，适合已完成 1m 时间轴治理的样本；若后续需要严格自然 5 分钟边界或跨日边界策略，应在保持 1m 质量继承的前提下单独加测试。
+
+## 里程碑 17：Snapshot 发布索引与 AlphaTenant 查询接口
+
+完成时间：2026-05-11
+
+### ✅ 已完成
+
+- 新增 `snapshot-list` CLI，提供 DataGovernedForBTC → AlphaTenant 的稳定 snapshot 发布接口：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli snapshot-list --for-alphatenant --format json
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli snapshot-list --for-alphatenant --format table
+```
+
+- `--for-alphatenant` 会按 `datagoverned.snapshot_index.v0` schema 聚合当前 `snapshots/` 下的 versioned governed snapshot，并刷新：
+
+```text
+snapshots/snapshot_index.json
+```
+
+- Index entry 明确包含：
+  - `dataset_key` / `snapshot_id` / `status` / `readiness`
+  - `path`，且限定在 `snapshots/` 下，不发布 raw / data_lake / normalized / sample fallback
+  - `row_count` / `allowed_rows` / `blocked_rows`
+  - `required_row_filter = allow_into_feature_layer == True`
+  - 核心文件列表：data、admission report、manifest、quality summary、schema、feature contract、forbidden raw access policy、snapshot summary
+  - feature contract 摘要：allowed feature columns、forbidden columns、required quality columns、timestamp / join semantics
+  - admission 安全边界：`is_trade_signal=false`、`is_strategy_ready=false`、`level2_auto_upgrade=false`
+  - provenance：governance/schema version、source hash summary、snapshot data hash
+
+- 新增 TDD 测试 `tests/test_snapshot_index.py`，覆盖：
+  - index JSON 可解析；
+  - AlphaTenant consumer contract 字段存在；
+  - required filter 正确；
+  - entry path 不含 raw / data_lake；
+  - admission 边界字段保持安全值；
+  - `allowed_feature_columns ∩ forbidden_as_features` 为空；
+  - CLI JSON/table 输出可用。
+
+### 📊 当前真实验证结果
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli snapshot-list --for-alphatenant --format json
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli snapshot-list --for-alphatenant --format table
+```
+
+结果摘要：
+
+- `schema_version=datagoverned.snapshot_index.v0`
+- `index_status=ready`
+- `snapshot_count=2`
+- 已生成 `snapshots/snapshot_index.json`（生成产物按 `.gitignore` 不提交）
+- 当前列出的 snapshots：
+  - `governed-snapshot-okx_btc_market_state_1m_v0_1_20240520_20240611_with_orderbook`
+    - status: `admitted`
+    - readiness: `admitted_with_row_level_quality_filter`
+    - row_count: 33,120
+    - allowed_rows: 32,404
+    - blocked_rows: 716
+  - `governed-snapshot-okx_btc_market_state_1m_v0_2_20240520_20241108_with_orderbook`
+    - status: `admitted`
+    - readiness: `admitted_with_row_level_quality_filter`
+    - row_count: 249,120
+    - allowed_rows: 165,673
+    - blocked_rows: 83,447
+
+### 🧪 验证命令
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m compileall -q src tests
+PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
+```
+
+结果：49 tests OK。
+
+### 🔒 边界
+
+- Snapshot index 是数据发布接口，不是策略准入、收益声明或 Level2 自动升级许可。
+- AlphaTenant 仍必须执行 `allow_into_feature_layer == True` 行级过滤。
+- 发布接口不提供、不暗示、不 fallback 到 raw、data_lake、normalized、sample、fullDataExtractionForBTC、backtests/data 或 data_pool。
+- `snapshots/snapshot_index.json` 是可再生成产物，默认不提交；代码、测试和文档才是本里程碑提交对象。
+

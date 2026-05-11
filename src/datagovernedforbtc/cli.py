@@ -76,6 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
     snap_parser = sub.add_parser("snapshot-admission", help="Package a curated sample into an AlphaTenant-readable governed snapshot.")
     snap_parser.add_argument("--label", required=True, help="Curated sample label, e.g. target_2024-05-20_to_2024-06-11_with_orderbook.")
     snap_parser.add_argument("--snapshot-id", default=None, help="Stable snapshot id. Default: okx_btc_market_state_1m_v0_1_<label>.")
+    snap_list_parser = sub.add_parser("snapshot-list", help="List governed snapshots via the stable snapshot publishing interface.")
+    snap_list_parser.add_argument("--for-alphatenant", action="store_true", help="Emit the AlphaTenant consumer contract schema and refresh snapshots/snapshot_index.json.")
+    snap_list_parser.add_argument("--format", choices=["json", "table"], default="json", help="Output format.")
     sub.add_parser("feature-scan", help="Scan raw feature points and output AlphaTenant target dataset shape report.")
     sub.add_parser("audit-okx", help="Audit current OKX historical data directory.")
     return parser
@@ -158,6 +161,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "snapshot-admission":
         from datagovernedforbtc.snapshot import run_snapshot_admission
         print(json.dumps(run_snapshot_admission(root, label=args.label, snapshot_id=args.snapshot_id), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "snapshot-list":
+        from datagovernedforbtc.snapshot import run_snapshot_list
+        print(run_snapshot_list(root, for_alphatenant=args.for_alphatenant, output_format=args.format), end="")
         return 0
     if args.command == "feature-scan":
         from datagovernedforbtc.feature_scan import run_feature_scan

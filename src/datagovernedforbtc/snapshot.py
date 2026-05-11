@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import shutil
+import subprocess
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -180,6 +181,259 @@ def write_forbidden_policy(path: Path) -> None:
         "如需新增数据，必须先在 DataGovernedForBTC 侧完成 manifest、quality report、time-causal feature、admission report，再暴露给 AlphaTenant。\n",
         encoding="utf-8",
     )
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def git_commit(root: Path) -> str | None:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=root,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+        )
+        return proc.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def rel_to_root(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def snapshot_dirs(root: Path) -> list[Path]:
+    base = root / "snapshots"
+    if not base.exists():
+        return []
+    return sorted(p for p in base.rglob("snapshot_id=*") if p.is_dir())
+
+
+def require_snapshot_files(snapshot_dir: Path) -> dict[str, str]:
+    files = {
+        "data": "curated_btc_market_state_1m.csv",
+        "data_admission_report": "data_admission_report.json",
+        "source_manifest": "source_manifest.json",
+        "quality_summary": "quality_summary.json",
+        "schema": "schema.json",
+        "feature_contract": "feature_contract.md",
+        "forbidden_raw_access_policy": "forbidden_raw_access_policy.md",
+        "snapshot_summary": "snapshot_summary.json",
+    }
+    return {key: name for key, name in files.items() if (snapshot_dir / name).exists()}
+
+
+def millis_to_utc_iso(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    try:
+        ms = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def build_snapshot_entry(root: Path, snapshot_dir: Path) -> dict[str, Any]:
+    summary_path = snapshot_dir / "snapshot_summary.json"
+    admission_path = snapshot_dir / "data_admission_report.json"
+    schema_path = snapshot_dir / "schema.json"
+    manifest_path = snapshot_dir / "source_manifest.json"
+    quality_path = snapshot_dir / "quality_summary.json"
+    if not summary_path.exists() or not admission_path.exists() or not schema_path.exists():
+        raise FileNotFoundError(f"snapshot contract files missing under {snapshot_dir}")
+
+    summary = read_json(summary_path)
+    admission_report = read_json(admission_path)
+    schema = read_json(schema_path)
+    manifest = read_json(manifest_path) if manifest_path.exists() else {}
+    quality_summary = read_json(quality_path) if quality_path.exists() else {}
+
+    snapshot_id = str(admission_report.get("snapshot_id") or summary.get("snapshot_id") or snapshot_dir.name.removeprefix("snapshot_id="))
+    dataset_key = f"governed-snapshot-{snapshot_id}"
+    readiness = str(admission_report.get("alpha_tenant_readiness") or summary.get("alpha_tenant_readiness") or "blocked")
+    allowed_rows = int(admission_report.get("allow_into_feature_layer_rows") or summary.get("allow_into_feature_layer_rows") or 0)
+    row_count = int(admission_report.get("row_count") or summary.get("curated_rows") or 0)
+    blocked_rows = int(admission_report.get("blocked_rows") or max(row_count - allowed_rows, 0))
+    future_leaks = int(admission_report.get("future_leak_violation_count") or summary.get("future_leak_violation_count") or 0)
+    core_files = require_snapshot_files(snapshot_dir)
+    missing_core_files = sorted({
+        "data",
+        "data_admission_report",
+        "source_manifest",
+        "quality_summary",
+        "schema",
+        "feature_contract",
+        "forbidden_raw_access_policy",
+        "snapshot_summary",
+    } - set(core_files))
+
+    if missing_core_files:
+        status = "blocked"
+        readiness = "blocked_missing_required_files"
+    elif future_leaks > 0:
+        status = "blocked"
+        readiness = "blocked_future_leak_risk"
+    elif allowed_rows > 0 and readiness == "admitted_with_row_level_quality_filter":
+        status = "admitted"
+    elif allowed_rows > 0:
+        status = "partial"
+    else:
+        status = "blocked"
+
+    data_path = snapshot_dir / core_files.get("data", "curated_btc_market_state_1m.csv")
+    source_hash_summary = None
+    curated_source = manifest.get("curated_source") if isinstance(manifest.get("curated_source"), dict) else {}
+    if curated_source.get("sha256"):
+        source_hash_summary = f"sha256:{curated_source['sha256']}"
+
+    return {
+        "dataset_key": dataset_key,
+        "snapshot_id": snapshot_id,
+        "status": status,
+        "readiness": readiness,
+        "path": rel_to_root(root, snapshot_dir),
+        "exchange": admission_report.get("exchange", "okx"),
+        "symbol": admission_report.get("instrument_name", "BTC-USDT"),
+        "instrument": admission_report.get("instrument_name", "BTC-USDT"),
+        "instrument_type": "spot",
+        "market_scope": "okx_spot_btc_usdt_with_perpetual_context",
+        "dataset_type": admission_report.get("dataset_type", "curated_btc_market_state_1m"),
+        "interval": admission_report.get("interval", "1m"),
+        "start_time_utc": millis_to_utc_iso(admission_report.get("min_feature_time_ms")) or quality_summary.get("window_start"),
+        "end_time_utc": millis_to_utc_iso(admission_report.get("max_feature_time_ms")) or quality_summary.get("window_end"),
+        "row_count": row_count,
+        "allowed_rows": allowed_rows,
+        "blocked_rows": blocked_rows,
+        "required_row_filter": "allow_into_feature_layer == True",
+        "files": core_files,
+        "feature_contract": {
+            "allowed_feature_columns": schema.get("allowed_feature_columns", []),
+            "forbidden_as_features": schema.get("forbidden_as_features", []),
+            "required_quality_columns": [
+                "allow_into_feature_layer",
+                "data_quality_flags",
+                "overall_data_quality_score",
+            ],
+            "timestamp_columns": {
+                "feature_time": "feature_time_ms",
+                "available_time": "available_time_ms",
+            },
+            "join_semantics": {
+                "required": "all joined source features must satisfy available_time_ms <= feature_time_ms",
+                "row_filter": "allow_into_feature_layer == True",
+            },
+        },
+        "admission": {
+            "allow_into_alphatenant": status in {"admitted", "partial"},
+            "allow_into_feature_layer_required": True,
+            "is_trade_signal": False,
+            "is_strategy_ready": False,
+            "level2_auto_upgrade": False,
+            "allowed_consumption_modes": [
+                "loader_smoke",
+                "feature_matrix",
+                "regime_input",
+                "research_only",
+            ],
+            "forbidden_consumption_modes": [
+                "live_trading",
+                "order_generation",
+                "strategy_return_claim",
+                "parameter_selection",
+                "level2_auto_upgrade",
+            ],
+        },
+        "provenance": {
+            "governance_version": admission_report.get("governance_version"),
+            "schema_version": admission_report.get("schema_version") or schema.get("schema_version"),
+            "source_hash_summary": source_hash_summary,
+            "snapshot_hash": f"sha256:{sha256_file(data_path)}" if data_path.exists() else None,
+        },
+        "missing_core_files": missing_core_files,
+    }
+
+
+def build_snapshot_index(root: Path, for_alphatenant: bool = False) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    for snap_dir in snapshot_dirs(root):
+        try:
+            entry = build_snapshot_entry(root, snap_dir)
+        except FileNotFoundError:
+            continue
+        if for_alphatenant and not entry["admission"]["allow_into_alphatenant"]:
+            # Keep blocked entries visible to AlphaTenant only when they have a stable dataset key.
+            entries.append(entry)
+        else:
+            entries.append(entry)
+
+    if not entries:
+        index_status = "blocked"
+    elif any(e["status"] == "admitted" for e in entries) and all(not e.get("missing_core_files") for e in entries):
+        index_status = "ready"
+    elif any(e["status"] in {"admitted", "partial"} for e in entries):
+        index_status = "partial"
+    else:
+        index_status = "blocked"
+
+    return {
+        "schema_version": "datagoverned.snapshot_index.v0",
+        "publisher": "DataGovernedForBTC",
+        "generated_at_utc": utc_now_iso(),
+        "project_root": str(root),
+        "consumer_contract": "alphatenant.governed_snapshot.v0" if for_alphatenant else "datagoverned.snapshot_index.v0",
+        "index_status": index_status,
+        "snapshot_count": len(entries),
+        "snapshots": entries,
+        "git_commit": git_commit(root),
+        "generator": {
+            "name": "datagovernedforbtc.snapshot.build_snapshot_index",
+            "command": "snapshot-list --for-alphatenant --format json" if for_alphatenant else "snapshot-list --format json",
+        },
+    }
+
+
+def write_snapshot_index(root: Path, for_alphatenant: bool = True) -> dict[str, Any]:
+    index = build_snapshot_index(root, for_alphatenant=for_alphatenant)
+    index_path = root / "snapshots" / "snapshot_index.json"
+    write_json(index_path, index)
+    return {
+        "index_path": str(index_path),
+        "schema_version": index["schema_version"],
+        "snapshot_count": index["snapshot_count"],
+        "index_status": index["index_status"],
+    }
+
+
+def format_snapshot_index_table(index: dict[str, Any]) -> str:
+    columns = ["dataset_key", "status", "readiness", "interval", "start_time_utc", "end_time_utc", "row_count", "allowed_rows", "blocked_rows"]
+    rows = [[str(entry.get(col, "")) for col in columns] for entry in index.get("snapshots", [])]
+    widths = [len(col) for col in columns]
+    for row in rows:
+        for i, value in enumerate(row):
+            widths[i] = max(widths[i], len(value))
+    header = " | ".join(col.ljust(widths[i]) for i, col in enumerate(columns))
+    sep = "-+-".join("-" * w for w in widths)
+    body = [" | ".join(value.ljust(widths[i]) for i, value in enumerate(row)) for row in rows]
+    return "\n".join([header, sep, *body]) + "\n"
+
+
+def run_snapshot_list(root: Path, for_alphatenant: bool = False, output_format: str = "json") -> str:
+    index = build_snapshot_index(root, for_alphatenant=for_alphatenant)
+    if for_alphatenant:
+        write_json(root / "snapshots" / "snapshot_index.json", index)
+    if output_format == "json":
+        return json.dumps(index, ensure_ascii=False, indent=2)
+    if output_format == "table":
+        return format_snapshot_index_table(index)
+    raise ValueError(f"unsupported snapshot-list format: {output_format}")
 
 
 def run_snapshot_admission(root: Path, label: str, snapshot_id: str | None = None) -> dict[str, Any]:
