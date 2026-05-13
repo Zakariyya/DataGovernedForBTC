@@ -1,0 +1,74 @@
+{
+  "schema_version": "datagoverned.alpha_tenant_research_readiness_report.v_next",
+  "generated_at_utc": null,
+  "snapshot_id": "<snapshot_id>",
+  "universe_id": "okx_spot_btc_usdt_with_okx_derivative_context",
+  "exchange_consistency_status": {
+    "exchange_consistency_scope": "single_exchange_okx_cross_market_context",
+    "allowed_source_exchanges": ["okx"],
+    "mixed_exchange_features_present": false,
+    "mixed_exchange_usage_policy": "fail_closed",
+    "cross_exchange_authorization_required": false
+  },
+  "research_window_start": "<UTC timestamp or date>",
+  "research_window_end": "<UTC timestamp or date>",
+  "sealed_verification_boundary": "2025-01-01T00:00:00Z",
+  "row_count": null,
+  "allowed_row_count": null,
+  "blocked_row_count": null,
+  "allowed_ratio": null,
+  "dataset_family_coverage": {
+    "matrix_path": "reports/coverage/alpha_tenant_dataset_family_coverage_matrix.json",
+    "summary": {}
+  },
+  "feature_group_coverage": {
+    "price_context": null,
+    "volatility_context": null,
+    "liquidity_context": null,
+    "trade_flow_context": null,
+    "orderbook_microstructure": null,
+    "funding_context": null,
+    "borrowing_context": null,
+    "data_quality_context": null,
+    "regime_context": null,
+    "opportunity_context": null,
+    "regime_input_context": null,
+    "cost_liquidity_context": null,
+    "tail_risk_context": null
+  },
+  "missing_stale_blocked_summary": {
+    "blocked_reason_code_counts": {},
+    "warning_reason_code_counts": {},
+    "source_family_missing_flag_counts": {},
+    "source_family_stale_flag_counts": {}
+  },
+  "no_lookahead_checks": {
+    "all_features_available_time_lte_feature_time": null,
+    "rolling_features_use_current_and_past_only": null,
+    "future_window_regime_confirmation_used": false,
+    "strategy_pnl_used_in_features": false
+  },
+  "future_leak_violation_count": null,
+  "required_filter": "allow_into_feature_layer == True",
+  "allowed_alpha_tenant_use": [
+    "coverage_audit",
+    "structural_hypothesis_preregistration",
+    "research_only_feature_matrix",
+    "regime_input_research",
+    "no_lookahead_alignment",
+    "forward_observation_input"
+  ],
+  "forbidden_alpha_tenant_use": [
+    "live_trading",
+    "paper_trading_permission",
+    "level2_auto_upgrade",
+    "parameter_selection",
+    "direct_trade_signal",
+    "cross_exchange_proxy"
+  ],
+  "readiness_status": "template_pending_snapshot_specific_generation",
+  "notes": [
+    "This template is not a Level2 readiness statement and not ALLOW_PAPER evidence.",
+    "AlphaTenant must still enforce its own sealed verification boundary and research protocol."
+  ]
+}

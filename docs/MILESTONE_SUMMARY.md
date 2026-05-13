@@ -898,3 +898,64 @@ PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
 - 发布接口不提供、不暗示、不 fallback 到 raw、data_lake、normalized、sample、fullDataExtractionForBTC、backtests/data 或 data_pool。
 - `snapshots/snapshot_index.json` 是可再生成产物，默认不提交；代码、测试和文档才是本里程碑提交对象。
 
+## 里程碑 18：Stage46 AlphaTenant 数据治理需求恢复与契约强化
+
+完成时间：2026-05-13
+
+### ✅ 已完成
+
+- 新增需求响应文档：
+
+```text
+docs/ALPHATENANT_STAGE46_DATA_GOVERNANCE_REQUIREMENTS.md
+```
+
+- 新增机器可读 contract 示例 / schema：
+
+```text
+schemas/alphatenant_snapshot_feature_contract_v_next.json
+```
+
+- 新增 AlphaTenant coverage matrix 恢复模板：
+
+```text
+reports/coverage/alpha_tenant_dataset_family_coverage_matrix.json
+reports/coverage/alpha_tenant_dataset_family_coverage_matrix.md
+```
+
+- 新增 AlphaTenant research readiness report 模板：
+
+```text
+reports/readiness/alpha_tenant_research_readiness_template.json
+reports/readiness/alpha_tenant_research_readiness_template.md
+```
+
+- 扩展 `src/datagovernedforbtc/snapshot.py`：
+  - `schema.json` 增加 `feature_group` / `feature_role` / `forbidden_usage` / `required_filter`。
+  - `feature_contract.md` 增加机器可读 JSON contract 区块。
+  - `snapshot_index` entry 增加 `universe_id` / `exchange_consistency_scope` / `allowed_source_exchanges` / `mixed_exchange_features_present` / `mixed_exchange_usage_policy`。
+  - 默认 OKX snapshot 明确为 `single_exchange_okx_cross_market_context`，禁止 Binance 等跨交易所代理混入。
+
+### 🧪 TDD 覆盖
+
+更新测试：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m unittest tests.test_snapshot_index -v
+```
+
+覆盖点：
+
+- snapshot index 暴露 `feature_group`、`feature_role`、`forbidden_usage`、`required_filter`。
+- `open` 被标注为 `price_context` / `raw_observed_market_state`。
+- `allow_into_feature_layer` 被标注为 `data_quality_context` / `quality_gate`。
+- contract 明确禁止 `trade_signal` 与 `level2_approval`。
+- snapshot index 暴露 OKX universe 与 fail-closed 交易所一致性策略。
+
+### 🔒 边界
+
+- 本里程碑只恢复并强化数据治理契约，不生成任何 buy/sell/long/short 信号。
+- 不计算策略收益，不给 Level2 readiness，不给 ALLOW_PAPER。
+- coverage matrix / readiness report 当前是模板与 contract 形态；真实数值必须由后续本地 audit / feature-scan / snapshot 生成流程填充。
+- 不改 raw `okx/`，不下载外部数据，不用 Binance 代理 OKX。
+

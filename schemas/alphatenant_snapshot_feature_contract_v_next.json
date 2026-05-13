@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datagovernedforbtc.local/schemas/alphatenant_snapshot_feature_contract_v_next.json",
+  "title": "AlphaTenant Snapshot Feature Contract vNext",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "required_filter",
+    "allowed_feature_columns",
+    "forbidden_as_features",
+    "feature_group",
+    "feature_role",
+    "forbidden_usage",
+    "exchange_consistency"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "alphatenant.snapshot_feature_contract.v_next"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "required_filter": {
+      "const": "allow_into_feature_layer == True"
+    },
+    "allowed_feature_columns": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "forbidden_as_features": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "feature_group": {
+      "type": "object",
+      "additionalProperties": {
+        "enum": [
+          "price_context",
+          "volatility_context",
+          "liquidity_context",
+          "trade_flow_context",
+          "orderbook_microstructure",
+          "funding_context",
+          "borrowing_context",
+          "data_quality_context",
+          "regime_context",
+          "activity_context",
+          "opportunity_context",
+          "regime_input_context",
+          "cost_liquidity_context",
+          "tail_risk_context"
+        ]
+      }
+    },
+    "feature_role": {
+      "type": "object",
+      "additionalProperties": {
+        "enum": [
+          "raw_observed_market_state",
+          "derived_causal_feature",
+          "quality_gate",
+          "regime_input",
+          "cost_liquidity_input",
+          "opportunity_input",
+          "tail_risk_context_input",
+          "not_alpha_signal"
+        ]
+      }
+    },
+    "forbidden_usage": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "trade_signal",
+          "order_generation",
+          "position_generation",
+          "parameter_selection",
+          "level2_approval",
+          "allow_paper_decision"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "exchange_consistency": {
+      "type": "object",
+      "required": [
+        "universe_id",
+        "exchange",
+        "market",
+        "instrument",
+        "instrument_type",
+        "source_exchange",
+        "source_market_type",
+        "source_instrument",
+        "source_dataset_family",
+        "exchange_consistency_scope",
+        "allowed_source_exchanges",
+        "mixed_exchange_features_present",
+        "mixed_exchange_usage_policy"
+      ],
+      "properties": {
+        "universe_id": {"type": "string"},
+        "exchange": {"type": "string"},
+        "market": {"type": "string"},
+        "instrument": {"type": "string"},
+        "instrument_type": {"type": "string"},
+        "source_exchange": {"type": "string"},
+        "source_market_type": {"type": "string"},
+        "source_instrument": {"type": "string"},
+        "source_dataset_family": {"type": "string"},
+        "exchange_consistency_scope": {
+          "enum": [
+            "single_exchange_single_market",
+            "single_exchange_okx_cross_market_context",
+            "cross_exchange_isolated_universe",
+            "cross_exchange_forbidden"
+          ]
+        },
+        "allowed_source_exchanges": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        },
+        "mixed_exchange_features_present": {"type": "boolean"},
+        "mixed_exchange_usage_policy": {
+          "enum": ["fail_closed", "isolated_universe_only", "explicit_authorization_required"]
+        }
+      }
+    },
+    "row_level_quality_gate": {
+      "type": "object",
+      "properties": {
+        "required_columns": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "blocked_reason_codes_vocabulary": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "warning_reason_codes_vocabulary": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "allowed_alpha_tenant_use": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "forbidden_alpha_tenant_use": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  },
+  "x-example": {
+    "schema_version": "alphatenant.snapshot_feature_contract.v_next",
+    "snapshot_id": "okx_btc_market_state_1m_v_next_example",
+    "required_filter": "allow_into_feature_layer == True",
+    "allowed_feature_columns": ["open", "high", "low", "close", "trade_count_1m", "orderbook_spread_bps"],
+    "forbidden_as_features": ["allow_into_feature_layer", "blocked_reason_codes", "future_leak_violation_count"],
+    "feature_group": {
+      "open": "price_context",
+      "trade_count_1m": "trade_flow_context",
+      "orderbook_spread_bps": "cost_liquidity_context",
+      "allow_into_feature_layer": "data_quality_context"
+    },
+    "feature_role": {
+      "open": "raw_observed_market_state",
+      "trade_count_1m": "opportunity_input",
+      "orderbook_spread_bps": "cost_liquidity_input",
+      "allow_into_feature_layer": "quality_gate"
+    },
+    "forbidden_usage": ["trade_signal", "order_generation", "position_generation", "parameter_selection", "level2_approval", "allow_paper_decision"],
+    "exchange_consistency": {
+      "universe_id": "okx_spot_btc_usdt_with_okx_derivative_context",
+      "exchange": "okx",
+      "market": "spot",
+      "instrument": "BTC-USDT",
+      "instrument_type": "spot",
+      "source_exchange": "okx",
+      "source_market_type": "spot_with_okx_perpetual_context",
+      "source_instrument": "BTC-USDT",
+      "source_dataset_family": "curated_btc_market_state",
+      "exchange_consistency_scope": "single_exchange_okx_cross_market_context",
+      "allowed_source_exchanges": ["okx"],
+      "mixed_exchange_features_present": false,
+      "mixed_exchange_usage_policy": "fail_closed"
+    }
+  }
+}

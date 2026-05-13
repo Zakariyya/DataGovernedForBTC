@@ -45,6 +45,90 @@ QUALITY_SCORE_COLUMNS = {
     "orderbook_quality_score",
 }
 
+FORBIDDEN_ALPHA_TENANT_USAGE = [
+    "trade_signal",
+    "order_generation",
+    "position_generation",
+    "parameter_selection",
+    "level2_approval",
+    "allow_paper_decision",
+]
+
+FEATURE_GROUPS = [
+    "price_context",
+    "volatility_context",
+    "liquidity_context",
+    "trade_flow_context",
+    "orderbook_microstructure",
+    "funding_context",
+    "borrowing_context",
+    "data_quality_context",
+    "regime_context",
+    "activity_context",
+    "opportunity_context",
+    "regime_input_context",
+    "cost_liquidity_context",
+    "tail_risk_context",
+]
+
+FEATURE_ROLES = [
+    "raw_observed_market_state",
+    "derived_causal_feature",
+    "quality_gate",
+    "regime_input",
+    "cost_liquidity_input",
+    "opportunity_input",
+    "tail_risk_context_input",
+    "not_alpha_signal",
+]
+
+
+def infer_feature_group(column: str) -> str:
+    c = column.lower()
+    if c in GOVERNANCE_COLUMNS or c in QUALITY_SCORE_COLUMNS or "quality" in c or "missing" in c or "stale" in c or c in {"blocked_reason_codes", "warning_reason_codes"}:
+        return "data_quality_context"
+    if c in META_COLUMNS or c.startswith("source_") or c in {"schema_version", "feature_version", "governance_version"}:
+        return "data_quality_context"
+    if "funding" in c:
+        return "funding_context"
+    if "borrow" in c:
+        return "borrowing_context"
+    if "orderbook" in c or "spread" in c or "depth" in c or "imbalance" in c or "book_" in c:
+        return "orderbook_microstructure"
+    if "trade" in c or "volume_delta" in c or c.startswith("buy_volume") or c.startswith("sell_volume"):
+        return "trade_flow_context"
+    if "volatility" in c or "realized_vol" in c or c.endswith("_vol") or "range" in c or "body_to_range" in c:
+        return "volatility_context"
+    if "trend" in c or "regime" in c or "breakout" in c or "choppiness" in c or "compression" in c or "expansion" in c:
+        return "regime_input_context"
+    if "tail" in c or "wick" in c or "jump" in c or "shock" in c or "collapse" in c or "downside" in c:
+        return "tail_risk_context"
+    if "activity" in c or "opportunity" in c or "close_location" in c or "gap" in c:
+        return "opportunity_context"
+    if c in {"open", "high", "low", "close", "vol_base", "vol_quote"} or "price" in c:
+        return "price_context"
+    return "price_context"
+
+
+def infer_feature_role(column: str, *, allowed_feature_columns: set[str]) -> str:
+    c = column.lower()
+    group = infer_feature_group(column)
+    if column in GOVERNANCE_COLUMNS or column in QUALITY_SCORE_COLUMNS or group == "data_quality_context":
+        return "quality_gate"
+    if group in {"cost_liquidity_context", "liquidity_context", "orderbook_microstructure"}:
+        return "cost_liquidity_input"
+    if group in {"regime_context", "regime_input_context"}:
+        return "regime_input"
+    if group in {"activity_context", "opportunity_context"}:
+        return "opportunity_input"
+    if group == "tail_risk_context":
+        return "tail_risk_context_input"
+    if c in {"open", "high", "low", "close", "vol_base", "vol_quote"}:
+        return "raw_observed_market_state"
+    if column in allowed_feature_columns:
+        return "derived_causal_feature"
+    return "not_alpha_signal"
+
 
 def write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +216,9 @@ def build_schema(columns: list[str]) -> dict[str, Any]:
         and not c.endswith("_time_utc")
         and c not in {"data_quality_flags"}
     ]
+    allowed_set = set(allowed_feature_columns)
+    feature_group = {c: infer_feature_group(c) for c in columns}
+    feature_role = {c: infer_feature_role(c, allowed_feature_columns=allowed_set) for c in columns}
     return {
         "dataset_type": "curated_btc_market_state_1m",
         "columns": columns,
@@ -139,7 +226,28 @@ def build_schema(columns: list[str]) -> dict[str, Any]:
         "governance_columns": governance_columns,
         "allowed_feature_columns": allowed_feature_columns,
         "forbidden_as_features": sorted(set(governance_columns + meta_columns + list(QUALITY_SCORE_COLUMNS))),
-        "row_filter_required_before_alpha_tenant_feature_use": "allow_into_feature_layer == True",
+        "feature_group": feature_group,
+        "feature_role": feature_role,
+        "feature_group_vocabulary": FEATURE_GROUPS,
+        "feature_role_vocabulary": FEATURE_ROLES,
+        "forbidden_usage": FORBIDDEN_ALPHA_TENANT_USAGE,
+        "required_filter": "allow_into_feature_layer == True",
+        "required_row_filter_before_alpha_tenant_feature_use": "allow_into_feature_layer == True",
+        "exchange_consistency": {
+            "universe_id": "okx_spot_btc_usdt_with_okx_derivative_context",
+            "exchange": "okx",
+            "market": "spot",
+            "instrument": "BTC-USDT",
+            "instrument_type": "spot",
+            "source_exchange": "okx",
+            "source_market_type": "spot_with_okx_perpetual_context",
+            "source_instrument": "BTC-USDT",
+            "source_dataset_family": "curated_btc_market_state",
+            "exchange_consistency_scope": "single_exchange_okx_cross_market_context",
+            "allowed_source_exchanges": ["okx"],
+            "mixed_exchange_features_present": False,
+            "mixed_exchange_usage_policy": "fail_closed",
+        },
     }
 
 
@@ -162,6 +270,19 @@ def write_feature_contract(path: Path, report: dict[str, Any], schema: dict[str,
         "## 允许作为候选特征的列",
         "```text",
         *schema["allowed_feature_columns"],
+        "```",
+        "",
+        "## 机器可读角色边界（JSON）",
+        "```json",
+        json.dumps({
+            "allowed_feature_columns": schema["allowed_feature_columns"],
+            "forbidden_as_features": schema["forbidden_as_features"],
+            "feature_group": schema["feature_group"],
+            "feature_role": schema["feature_role"],
+            "forbidden_usage": schema["forbidden_usage"],
+            "required_filter": schema["required_filter"],
+            "exchange_consistency": schema["exchange_consistency"],
+        }, ensure_ascii=False, indent=2),
         "```",
         "",
         "## 治理列不能作为模型特征",
@@ -293,6 +414,16 @@ def build_snapshot_entry(root: Path, snapshot_dir: Path) -> dict[str, Any]:
     curated_source = manifest.get("curated_source") if isinstance(manifest.get("curated_source"), dict) else {}
     if curated_source.get("sha256"):
         source_hash_summary = f"sha256:{curated_source['sha256']}"
+    exchange_consistency = schema.get("exchange_consistency", {}) if isinstance(schema.get("exchange_consistency"), dict) else {}
+    allowed_feature_columns = list(schema.get("allowed_feature_columns", []))
+    forbidden_as_features = list(schema.get("forbidden_as_features", []))
+    schema_columns = list(schema.get("columns", []))
+    if not schema_columns:
+        schema_columns = sorted(set(allowed_feature_columns + forbidden_as_features))
+    feature_group = schema.get("feature_group") if isinstance(schema.get("feature_group"), dict) else {c: infer_feature_group(c) for c in schema_columns}
+    feature_role = schema.get("feature_role") if isinstance(schema.get("feature_role"), dict) else {
+        c: infer_feature_role(c, allowed_feature_columns=set(allowed_feature_columns)) for c in schema_columns
+    }
 
     return {
         "dataset_key": dataset_key,
@@ -300,6 +431,11 @@ def build_snapshot_entry(root: Path, snapshot_dir: Path) -> dict[str, Any]:
         "status": status,
         "readiness": readiness,
         "path": rel_to_root(root, snapshot_dir),
+        "universe_id": exchange_consistency.get("universe_id", "okx_spot_btc_usdt_with_okx_derivative_context"),
+        "exchange_consistency_scope": exchange_consistency.get("exchange_consistency_scope", "single_exchange_okx_cross_market_context"),
+        "allowed_source_exchanges": exchange_consistency.get("allowed_source_exchanges", ["okx"]),
+        "mixed_exchange_features_present": exchange_consistency.get("mixed_exchange_features_present", False),
+        "mixed_exchange_usage_policy": exchange_consistency.get("mixed_exchange_usage_policy", "fail_closed"),
         "exchange": admission_report.get("exchange", "okx"),
         "symbol": admission_report.get("instrument_name", "BTC-USDT"),
         "instrument": admission_report.get("instrument_name", "BTC-USDT"),
@@ -315,8 +451,12 @@ def build_snapshot_entry(root: Path, snapshot_dir: Path) -> dict[str, Any]:
         "required_row_filter": "allow_into_feature_layer == True",
         "files": core_files,
         "feature_contract": {
-            "allowed_feature_columns": schema.get("allowed_feature_columns", []),
-            "forbidden_as_features": schema.get("forbidden_as_features", []),
+            "allowed_feature_columns": allowed_feature_columns,
+            "forbidden_as_features": forbidden_as_features,
+            "feature_group": feature_group,
+            "feature_role": feature_role,
+            "forbidden_usage": schema.get("forbidden_usage", FORBIDDEN_ALPHA_TENANT_USAGE),
+            "required_filter": schema.get("required_filter", "allow_into_feature_layer == True"),
             "required_quality_columns": [
                 "allow_into_feature_layer",
                 "data_quality_flags",

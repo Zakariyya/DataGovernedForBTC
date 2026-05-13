@@ -99,6 +99,21 @@ class SnapshotIndexTest(unittest.TestCase):
             allowed = set(entry["feature_contract"]["allowed_feature_columns"])
             forbidden = set(entry["feature_contract"]["forbidden_as_features"])
             self.assertFalse(allowed & forbidden)
+            contract = entry["feature_contract"]
+            self.assertEqual(contract["required_filter"], "allow_into_feature_layer == True")
+            self.assertIn("feature_group", contract)
+            self.assertIn("feature_role", contract)
+            self.assertIn("forbidden_usage", contract)
+            self.assertEqual(contract["feature_group"]["open"], "price_context")
+            self.assertEqual(contract["feature_role"]["open"], "raw_observed_market_state")
+            self.assertEqual(contract["feature_role"]["allow_into_feature_layer"], "quality_gate")
+            self.assertIn("trade_signal", contract["forbidden_usage"])
+            self.assertIn("level2_approval", contract["forbidden_usage"])
+            self.assertEqual(entry["universe_id"], "okx_spot_btc_usdt_with_okx_derivative_context")
+            self.assertEqual(entry["exchange_consistency_scope"], "single_exchange_okx_cross_market_context")
+            self.assertEqual(entry["allowed_source_exchanges"], ["okx"])
+            self.assertFalse(entry["mixed_exchange_features_present"])
+            self.assertEqual(entry["mixed_exchange_usage_policy"], "fail_closed")
 
     def test_write_snapshot_index_and_cli_json_are_parseable(self):
         with tempfile.TemporaryDirectory() as td:
