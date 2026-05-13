@@ -1,37 +1,27 @@
 # AlphaTenant Dataset Family Coverage Matrix
 
-状态：Stage46 恢复模板，等待下一次本地 coverage audit / feature-scan 生成真实数值。
+Generated: `2026-05-13T04:30:02Z`
 
-## 用途
+Universe: `okx_spot_btc_usdt_with_okx_derivative_context`
+Exchange consistency: `single_exchange_okx_cross_market_context`; allowed exchanges: `okx`
 
-这个矩阵用于回答 AlphaTenant：当前 snapshot 中哪些数据家族可用、哪些只是 raw coverage、哪些已经 feature governed、哪些进入 snapshot、哪些被 quality gate 阻断、哪些完全 unavailable。
+| exchange | market | instrument | family | raw | governed_feature | snapshot | dates | missing | blocked | admission_status |
+|---|---|---|---|---:|---:|---:|---:|---:|---:|---|
+| okx | spot | BTC-USDT | candlestick | True | True | True | 568 / 1041 | 473 | 1 | snapshot_available |
+| okx | spot | BTC-USDT | trade | True | True | True | 1215 / 1709 | 494 | 0 | snapshot_available |
+| okx | spot | BTC-USDT | orderbook | True | True | True | 241 / 716 | 475 | 0 | snapshot_available |
+| okx | perpetual | BTC-USDT-SWAP | funding | True | True | True | 1422 / 1528 | 106 | 0 | snapshot_available |
+| okx | spot | BTC | borrowing | True | True | True | 412 / 1605 | 1193 | 0 | snapshot_available |
+| okx | spot | USDT | borrowing | True | True | True | 412 / 1605 | 1193 | 0 | snapshot_available |
+| okx | perpetual | BTC-USDT-SWAP | open_interest | False | False | False | 0 / None | 0 | 0 | unavailable |
+| okx | perpetual | BTC-USDT-SWAP | long_short_ratio | False | False | False | 0 / None | 0 | 0 | unavailable |
+| okx | perpetual | BTC-USDT-SWAP | liquidation | False | False | False | 0 / None | 0 | 0 | unavailable |
+| okx | spot | BTC-USDT | taker_flow | False | False | False | 0 / None | 0 | 0 | unavailable |
+| okx | perpetual | BTC-USDT-SWAP | mark_price | False | False | False | 0 / None | 0 | 0 | unavailable |
+| okx | spot | BTC-USDT | index_price | False | False | False | 0 / None | 0 | 0 | unavailable |
 
-## 机器可读文件
+## Notes
 
-- `reports/coverage/alpha_tenant_dataset_family_coverage_matrix.json`
-
-## 字段
-
-| 字段 | 含义 |
-|---|---|
-| exchange | source exchange，默认 OKX |
-| market | spot / perpetual / margin 等市场类型 |
-| instrument | 源品种 |
-| dataset_family | candlestick / funding / borrowing / trade / orderbook / OI 等 |
-| min_event_time / max_event_time | 该数据家族真实事件时间范围 |
-| date_count / expected_date_count | 实际覆盖日期数 / 期望日期数 |
-| missing_dates | 缺失日期 |
-| partial_dates | 部分覆盖日期 |
-| stale_dates | stale 日期 |
-| quality_blocked_dates | 被质量闸门阻断日期 |
-| raw_coverage_available | 是否存在 raw coverage |
-| governed_feature_available | 是否已进入治理 feature 层 |
-| alpha_tenant_snapshot_available | 是否进入 AlphaTenant 可消费 snapshot |
-| admission_status | admitted / blocked / unavailable / pending 等 |
-
-## 禁止推断
-
-- 不得从 candles 覆盖推断 funding、OI、orderbook 覆盖。
-- 不得把 raw orderbook archive 当成 reconstructed L2 readiness。
-- 不得用 Binance 数据代理 OKX 缺失数据。
-- 不得把 raw coverage 说成 feature readiness。
+- Raw coverage is not feature readiness.
+- Candlestick coverage is not evidence for funding/OI/orderbook/liquidation coverage.
+- Binance or other exchanges are not used as OKX proxies; cross-exchange data remains fail-closed.

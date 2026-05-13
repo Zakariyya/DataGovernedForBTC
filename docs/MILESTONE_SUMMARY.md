@@ -959,3 +959,63 @@ PYTHONPATH=src /usr/bin/python3 -m unittest tests.test_snapshot_index -v
 - coverage matrix / readiness report 当前是模板与 contract 形态；真实数值必须由后续本地 audit / feature-scan / snapshot 生成流程填充。
 - 不改 raw `okx/`，不下载外部数据，不用 Binance 代理 OKX。
 
+## 里程碑 19：AlphaTenant coverage / readiness 本地生成闭环
+
+完成时间：2026-05-13
+
+### ✅ 已完成
+
+- 新增 `src/datagovernedforbtc/alpha_reports.py`，基于本地 raw scan、`data_lake/features` 与 `snapshots` 生成 AlphaTenant 专用报告。
+- 新增 CLI：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli alpha-coverage-matrix
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli alpha-readiness-report --snapshot-id okx_btc_market_state_1m_v0_2_20240520_20241108_with_orderbook
+```
+
+- 真实填充并刷新：
+
+```text
+reports/coverage/alpha_tenant_dataset_family_coverage_matrix.json
+reports/coverage/alpha_tenant_dataset_family_coverage_matrix.md
+reports/readiness/alpha_tenant_research_readiness_okx_btc_market_state_1m_v0_2_20240520_20241108_with_orderbook.json
+reports/readiness/alpha_tenant_research_readiness_okx_btc_market_state_1m_v0_2_20240520_20241108_with_orderbook.md
+```
+
+### 📊 真实生成结果摘要
+
+- coverage matrix schema：`datagoverned.alpha_tenant_dataset_family_coverage_matrix.v1`
+- coverage rows：12
+- snapshot_count：2
+- v0.2 readiness status：`research_ready_with_row_level_quality_filter`
+- v0.2 row_count：249,120
+- v0.2 allowed_row_count：165,673
+- v0.2 blocked_row_count：83,447
+- v0.2 allowed_ratio：约 0.665033
+- v0.2 future_leak_violation_count：0
+- 交易所一致性：`single_exchange_okx_cross_market_context`，allowed_source_exchanges=`[okx]`，mixed_exchange_features_present=`false`，mixed_exchange_usage_policy=`fail_closed`
+
+### 🧪 TDD / 验证
+
+新增测试：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m unittest tests.test_alpha_reports -v
+```
+
+全量验证：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m compileall -q src tests
+PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
+```
+
+结果：51 tests OK。
+
+### 🔒 边界
+
+- coverage/readiness 报告仍是研究数据可用性报告，不是策略收益报告。
+- `research_ready_with_row_level_quality_filter` 不等于 Level2 readiness，不等于 ALLOW_PAPER。
+- OI / long_short_ratio / liquidation / taker_flow / mark_price / index_price 当前被明确标记 unavailable，未用 Binance 或其他交易所代理。
+- 当前完成的是合同、索引、coverage、readiness 与现有 snapshot 的本地报告生成闭环；新增 opportunity/regime/cost/tail 派生字段和 15m/1h 新 snapshot 仍需后续独立里程碑实现。
+

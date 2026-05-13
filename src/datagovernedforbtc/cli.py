@@ -79,6 +79,9 @@ def build_parser() -> argparse.ArgumentParser:
     snap_list_parser = sub.add_parser("snapshot-list", help="List governed snapshots via the stable snapshot publishing interface.")
     snap_list_parser.add_argument("--for-alphatenant", action="store_true", help="Emit the AlphaTenant consumer contract schema and refresh snapshots/snapshot_index.json.")
     snap_list_parser.add_argument("--format", choices=["json", "table"], default="json", help="Output format.")
+    sub.add_parser("alpha-coverage-matrix", help="Generate AlphaTenant dataset-family coverage matrix from local governed artifacts.")
+    ready_parser = sub.add_parser("alpha-readiness-report", help="Generate AlphaTenant research-readiness report for a governed snapshot.")
+    ready_parser.add_argument("--snapshot-id", default=None, help="Snapshot id to report. Default: latest admitted snapshot in index order.")
     sub.add_parser("feature-scan", help="Scan raw feature points and output AlphaTenant target dataset shape report.")
     sub.add_parser("audit-okx", help="Audit current OKX historical data directory.")
     return parser
@@ -165,6 +168,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "snapshot-list":
         from datagovernedforbtc.snapshot import run_snapshot_list
         print(run_snapshot_list(root, for_alphatenant=args.for_alphatenant, output_format=args.format), end="")
+        return 0
+    if args.command == "alpha-coverage-matrix":
+        from datagovernedforbtc.alpha_reports import write_dataset_family_coverage_matrix
+        print(json.dumps(write_dataset_family_coverage_matrix(root), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "alpha-readiness-report":
+        from datagovernedforbtc.alpha_reports import write_research_readiness_report
+        print(json.dumps(write_research_readiness_report(root, snapshot_id=args.snapshot_id), ensure_ascii=False, indent=2))
         return 0
     if args.command == "feature-scan":
         from datagovernedforbtc.feature_scan import run_feature_scan
