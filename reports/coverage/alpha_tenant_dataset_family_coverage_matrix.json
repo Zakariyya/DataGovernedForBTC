@@ -1,6 +1,6 @@
 {
   "schema_version": "datagoverned.alpha_tenant_dataset_family_coverage_matrix.v1",
-  "generated_at_utc": "2026-05-13T04:30:02Z",
+  "generated_at_utc": "2026-05-13T06:39:48Z",
   "purpose": "Machine-readable coverage/admission matrix for AlphaTenant research readiness. Raw coverage is separated from governed feature and snapshot availability.",
   "universe_id": "okx_spot_btc_usdt_with_okx_derivative_context",
   "exchange_consistency_scope": "single_exchange_okx_cross_market_context",
@@ -10,7 +10,7 @@
   "mixed_exchange_features_present": false,
   "mixed_exchange_usage_policy": "fail_closed",
   "snapshot_index_status": "ready",
-  "snapshot_count": 2,
+  "snapshot_count": 6,
   "rows": [
     {
       "exchange": "okx",

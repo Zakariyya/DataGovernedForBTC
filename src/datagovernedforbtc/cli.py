@@ -75,10 +75,14 @@ def build_parser() -> argparse.ArgumentParser:
     cur_5m_parser.add_argument("--label", default=None, help="Output 5m sample label. Default: <source-label>_5m.")
     snap_parser = sub.add_parser("snapshot-admission", help="Package a curated sample into an AlphaTenant-readable governed snapshot.")
     snap_parser.add_argument("--label", required=True, help="Curated sample label, e.g. target_2024-05-20_to_2024-06-11_with_orderbook.")
-    snap_parser.add_argument("--snapshot-id", default=None, help="Stable snapshot id. Default: okx_btc_market_state_1m_v0_1_<label>.")
+    snap_parser.add_argument("--snapshot-id", default=None, help="Stable snapshot id. Default: okx_btc_market_state_<interval>_v0_1_<label>.")
+    snap_parser.add_argument("--interval", choices=["1m", "5m", "15m", "1h"], default="1m", help="Curated sample interval to package.")
     snap_list_parser = sub.add_parser("snapshot-list", help="List governed snapshots via the stable snapshot publishing interface.")
     snap_list_parser.add_argument("--for-alphatenant", action="store_true", help="Emit the AlphaTenant consumer contract schema and refresh snapshots/snapshot_index.json.")
     snap_list_parser.add_argument("--format", choices=["json", "table"], default="json", help="Output format.")
+    stage46_parser = sub.add_parser("stage46-context-enrich", help="Add Stage46 opportunity/regime/cost/tail/reason-code context columns and 15m/1h governed aggregates.")
+    stage46_parser.add_argument("--source-label", required=True, help="Existing governed 1m curated sample label.")
+    stage46_parser.add_argument("--label", default=None, help="Output enriched label. Default: <source-label>_stage46.")
     sub.add_parser("alpha-coverage-matrix", help="Generate AlphaTenant dataset-family coverage matrix from local governed artifacts.")
     ready_parser = sub.add_parser("alpha-readiness-report", help="Generate AlphaTenant research-readiness report for a governed snapshot.")
     ready_parser.add_argument("--snapshot-id", default=None, help="Snapshot id to report. Default: latest admitted snapshot in index order.")
@@ -163,11 +167,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "snapshot-admission":
         from datagovernedforbtc.snapshot import run_snapshot_admission
-        print(json.dumps(run_snapshot_admission(root, label=args.label, snapshot_id=args.snapshot_id), ensure_ascii=False, indent=2))
+        print(json.dumps(run_snapshot_admission(root, label=args.label, snapshot_id=args.snapshot_id, interval=args.interval), ensure_ascii=False, indent=2))
         return 0
     if args.command == "snapshot-list":
         from datagovernedforbtc.snapshot import run_snapshot_list
         print(run_snapshot_list(root, for_alphatenant=args.for_alphatenant, output_format=args.format), end="")
+        return 0
+    if args.command == "stage46-context-enrich":
+        from datagovernedforbtc.stage46_contexts import run_stage46_enrich_sample
+        print(json.dumps(run_stage46_enrich_sample(root, source_label=args.source_label, label=args.label), ensure_ascii=False, indent=2))
         return 0
     if args.command == "alpha-coverage-matrix":
         from datagovernedforbtc.alpha_reports import write_dataset_family_coverage_matrix

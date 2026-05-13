@@ -28,12 +28,16 @@
     },
     "allowed_feature_columns": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "uniqueItems": true
     },
     "forbidden_as_features": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "uniqueItems": true
     },
     "feature_group": {
@@ -104,15 +108,33 @@
         "mixed_exchange_usage_policy"
       ],
       "properties": {
-        "universe_id": {"type": "string"},
-        "exchange": {"type": "string"},
-        "market": {"type": "string"},
-        "instrument": {"type": "string"},
-        "instrument_type": {"type": "string"},
-        "source_exchange": {"type": "string"},
-        "source_market_type": {"type": "string"},
-        "source_instrument": {"type": "string"},
-        "source_dataset_family": {"type": "string"},
+        "universe_id": {
+          "type": "string"
+        },
+        "exchange": {
+          "type": "string"
+        },
+        "market": {
+          "type": "string"
+        },
+        "instrument": {
+          "type": "string"
+        },
+        "instrument_type": {
+          "type": "string"
+        },
+        "source_exchange": {
+          "type": "string"
+        },
+        "source_market_type": {
+          "type": "string"
+        },
+        "source_instrument": {
+          "type": "string"
+        },
+        "source_dataset_family": {
+          "type": "string"
+        },
         "exchange_consistency_scope": {
           "enum": [
             "single_exchange_single_market",
@@ -123,12 +145,20 @@
         },
         "allowed_source_exchanges": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "uniqueItems": true
         },
-        "mixed_exchange_features_present": {"type": "boolean"},
+        "mixed_exchange_features_present": {
+          "type": "boolean"
+        },
         "mixed_exchange_usage_policy": {
-          "enum": ["fail_closed", "isolated_universe_only", "explicit_authorization_required"]
+          "enum": [
+            "fail_closed",
+            "isolated_universe_only",
+            "explicit_authorization_required"
+          ]
         }
       }
     },
@@ -137,33 +167,54 @@
       "properties": {
         "required_columns": {
           "type": "array",
-          "items": {"type": "string"}
+          "items": {
+            "type": "string"
+          }
         },
         "blocked_reason_codes_vocabulary": {
           "type": "array",
-          "items": {"type": "string"}
+          "items": {
+            "type": "string"
+          }
         },
         "warning_reason_codes_vocabulary": {
           "type": "array",
-          "items": {"type": "string"}
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
     "allowed_alpha_tenant_use": {
       "type": "array",
-      "items": {"type": "string"}
+      "items": {
+        "type": "string"
+      }
     },
     "forbidden_alpha_tenant_use": {
       "type": "array",
-      "items": {"type": "string"}
+      "items": {
+        "type": "string"
+      }
     }
   },
   "x-example": {
     "schema_version": "alphatenant.snapshot_feature_contract.v_next",
     "snapshot_id": "okx_btc_market_state_1m_v_next_example",
     "required_filter": "allow_into_feature_layer == True",
-    "allowed_feature_columns": ["open", "high", "low", "close", "trade_count_1m", "orderbook_spread_bps"],
-    "forbidden_as_features": ["allow_into_feature_layer", "blocked_reason_codes", "future_leak_violation_count"],
+    "allowed_feature_columns": [
+      "open",
+      "high",
+      "low",
+      "close",
+      "trade_count_1m",
+      "orderbook_spread_bps"
+    ],
+    "forbidden_as_features": [
+      "allow_into_feature_layer",
+      "blocked_reason_codes",
+      "future_leak_violation_count"
+    ],
     "feature_group": {
       "open": "price_context",
       "trade_count_1m": "trade_flow_context",
@@ -176,7 +227,14 @@
       "orderbook_spread_bps": "cost_liquidity_input",
       "allow_into_feature_layer": "quality_gate"
     },
-    "forbidden_usage": ["trade_signal", "order_generation", "position_generation", "parameter_selection", "level2_approval", "allow_paper_decision"],
+    "forbidden_usage": [
+      "trade_signal",
+      "order_generation",
+      "position_generation",
+      "parameter_selection",
+      "level2_approval",
+      "allow_paper_decision"
+    ],
     "exchange_consistency": {
       "universe_id": "okx_spot_btc_usdt_with_okx_derivative_context",
       "exchange": "okx",
@@ -188,9 +246,94 @@
       "source_instrument": "BTC-USDT",
       "source_dataset_family": "curated_btc_market_state",
       "exchange_consistency_scope": "single_exchange_okx_cross_market_context",
-      "allowed_source_exchanges": ["okx"],
+      "allowed_source_exchanges": [
+        "okx"
+      ],
       "mixed_exchange_features_present": false,
       "mixed_exchange_usage_policy": "fail_closed"
     }
-  }
+  },
+  "x-stage46-implemented-fields": {
+    "opportunity_context": [
+      "rolling_realized_volatility_5m",
+      "rolling_realized_volatility_15m",
+      "rolling_realized_volatility_1h",
+      "rolling_range_pct_5m",
+      "rolling_range_pct_15m",
+      "rolling_range_pct_1h",
+      "candle_body_to_range_ratio",
+      "close_location_in_range",
+      "intraday_range_percentile_causal",
+      "recent_gap_or_missing_bar_count",
+      "trade_volume_1m",
+      "orderbook_spread_bps",
+      "liquidity_data_stale_flag",
+      "no_activity_or_low_information_flag"
+    ],
+    "regime_input_context": [
+      "causal_trend_slope_15m",
+      "causal_trend_slope_1h",
+      "causal_trend_slope_4h",
+      "rolling_high_low_breakout_distance",
+      "volatility_expansion_ratio",
+      "realized_volatility_regime_percentile",
+      "range_compression_score",
+      "range_expansion_score",
+      "trend_persistence_score",
+      "choppiness_or_range_bound_score",
+      "market_state_transition_candidate_flag"
+    ],
+    "cost_liquidity_context": [
+      "spread_bps",
+      "spread_percentile_causal",
+      "orderbook_imbalance_near_mid",
+      "trade_volume_usd_1m",
+      "trade_volume_usd_5m",
+      "volume_drought_flag",
+      "orderbook_stale_ms",
+      "orderbook_reconstruction_quality",
+      "crossed_book_flag",
+      "liquidity_fragility_flag",
+      "estimated_minimum_slippage_bucket",
+      "orderbook_missing",
+      "orderbook_stale",
+      "spread_unavailable",
+      "depth_unavailable",
+      "liquidity_context_unreliable"
+    ],
+    "tail_risk_context": [
+      "rolling_return_abs_percentile",
+      "rolling_downside_volatility",
+      "intraday_extreme_move_flag",
+      "wick_ratio",
+      "tail_ratio",
+      "jump_candidate_flag",
+      "liquidation_proxy_context",
+      "funding_shock_context",
+      "spread_shock_flag",
+      "depth_collapse_flag",
+      "volatility_cluster_score"
+    ],
+    "row_level_quality_gate": [
+      "blocked_reason_codes",
+      "warning_reason_codes",
+      "source_family_missing_flags",
+      "source_family_stale_flags"
+    ]
+  },
+  "x-horizon-safe-snapshots": [
+    "1m",
+    "5m",
+    "15m",
+    "1h"
+  ],
+  "x-forbidden-semantics": [
+    "buy_signal",
+    "sell_signal",
+    "long_signal",
+    "short_signal",
+    "strategy_pnl",
+    "level2_readiness",
+    "allow_paper"
+  ]
 }

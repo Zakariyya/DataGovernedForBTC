@@ -1019,3 +1019,70 @@ PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests -v
 - OI / long_short_ratio / liquidation / taker_flow / mark_price / index_price 当前被明确标记 unavailable，未用 Binance 或其他交易所代理。
 - 当前完成的是合同、索引、coverage、readiness 与现有 snapshot 的本地报告生成闭环；新增 opportunity/regime/cost/tail 派生字段和 15m/1h 新 snapshot 仍需后续独立里程碑实现。
 
+## 里程碑 20：Stage46 opportunity / regime / cost / tail 上下文与高周期 snapshot 闭环
+
+完成时间：2026-05-13
+
+### ✅ 已完成
+
+- 新增 `src/datagovernedforbtc/stage46_contexts.py`。
+- 新增 CLI：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m datagovernedforbtc.cli stage46-context-enrich --source-label target_2024-05-20_to_2024-11-08_with_orderbook --label target_2024-05-20_to_2024-11-08_with_orderbook_stage46
+```
+
+- 对 v0.2 governed 1m 样本生成 Stage46 增强版：
+
+```text
+data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=1m/sample=target_2024-05-20_to_2024-11-08_with_orderbook_stage46/curated_btc_market_state_1m.csv
+data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=5m/sample=target_2024-05-20_to_2024-11-08_with_orderbook_stage46/curated_btc_market_state_5m.csv
+data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=15m/sample=target_2024-05-20_to_2024-11-08_with_orderbook_stage46/curated_btc_market_state_15m.csv
+data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=1h/sample=target_2024-05-20_to_2024-11-08_with_orderbook_stage46/curated_btc_market_state_1h.csv
+```
+
+- 发布 v0.3 Stage46 snapshots：
+
+```text
+okx_btc_market_state_1m_v0_3_20240520_20241108_stage46
+okx_btc_market_state_5m_v0_3_20240520_20241108_stage46
+okx_btc_market_state_15m_v0_3_20240520_20241108_stage46
+okx_btc_market_state_1h_v0_3_20240520_20241108_stage46
+```
+
+### 📊 真实生成结果摘要
+
+- 1m rows：249,120；allowed：165,673；blocked：83,447；future_leak_violation_count：0。
+- 5m rows：49,824；allowed：33,116；blocked：16,708；future_leak_violation_count：0。
+- 15m rows：16,608；allowed：11,031；blocked：5,577；future_leak_violation_count：0。
+- 1h rows：4,152；allowed：2,745；blocked：1,407；future_leak_violation_count：0。
+
+### 🧩 新增字段族
+
+- opportunity / activity context：`rolling_realized_volatility_5m/15m/1h`、`rolling_range_pct_5m/15m/1h`、`candle_body_to_range_ratio`、`close_location_in_range`、`intraday_range_percentile_causal`、`recent_gap_or_missing_bar_count`、`trade_volume_1m`、`orderbook_spread_bps`、`liquidity_data_stale_flag`、`no_activity_or_low_information_flag`。
+- regime input context：`causal_trend_slope_15m/1h/4h`、`rolling_high_low_breakout_distance`、`volatility_expansion_ratio`、`realized_volatility_regime_percentile`、`range_compression_score`、`range_expansion_score`、`trend_persistence_score`、`choppiness_or_range_bound_score`、`market_state_transition_candidate_flag`。
+- cost / liquidity context：`spread_bps`、`spread_percentile_causal`、`orderbook_imbalance_near_mid`、`trade_volume_usd_1m/5m`、`volume_drought_flag`、`orderbook_stale_ms`、`orderbook_reconstruction_quality`、`crossed_book_flag`、`liquidity_fragility_flag`、`estimated_minimum_slippage_bucket`、`orderbook_missing`、`orderbook_stale`、`spread_unavailable`、`depth_unavailable`、`liquidity_context_unreliable`。
+- tail risk context：`rolling_return_abs_percentile`、`rolling_downside_volatility`、`intraday_extreme_move_flag`、`wick_ratio`、`tail_ratio`、`jump_candidate_flag`、`liquidation_proxy_context`、`funding_shock_context`、`spread_shock_flag`、`depth_collapse_flag`、`volatility_cluster_score`。
+- row-level quality reason codes：`blocked_reason_codes`、`warning_reason_codes`、`source_family_missing_flags`、`source_family_stale_flags`。
+
+### 🧪 TDD / 验证
+
+新增测试：
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m unittest tests.test_stage46_contexts -v
+```
+
+覆盖点：
+
+- Stage46 上下文字段只基于当前及过去 governed rows。
+- 15m / 1h 高周期由 governed 1m 聚合，若任一关键 1m source row 被 blocked，高周期 row 也 blocked。
+- snapshot contract 将新字段映射到 `opportunity_input`、`regime_input`、`cost_liquidity_input`、`tail_risk_context_input`，并将 reason-code 字段列为 forbidden-as-feature。
+
+### 🔒 边界
+
+- 所有新增字段仍是市场状态 / 机会集 / regime input / 成本流动性 / 尾部风险上下文，不是 buy/sell/long/short 信号。
+- `estimated_minimum_slippage_bucket` 是粗治理分桶，不基于策略收益反推。
+- `liquidation_proxy_context` 在无真实 OKX liquidation 数据时明确 unavailable，不使用 Binance 或其他交易所代理。
+- v0.3 snapshots 仍需 AlphaTenant 侧执行 `allow_into_feature_layer == True` 过滤；不代表 Level2 readiness，不代表 ALLOW_PAPER。
+

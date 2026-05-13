@@ -302,3 +302,50 @@ DataGovernedForBTC 禁止：
 ## 15. 一句话总结
 
 DataGovernedForBTC 下一步不是给 AlphaTenant 更多可交易信号，而是给 AlphaTenant 更可审计的机会集输入、regime transition 输入、成本/流动性脆弱输入、尾部风险上下文、数据家族覆盖矩阵、交易所一致性证明和 row-level quality reason codes。
+
+## 14. 本轮 v0.3 实现状态（2026-05-13）
+
+### ✅ 已实现并发布
+
+- Stage46 context enrichment CLI：`stage46-context-enrich`。
+- v0.3 Stage46 governed samples：1m / 5m / 15m / 1h。
+- v0.3 Stage46 governed snapshots：
+  - `okx_btc_market_state_1m_v0_3_20240520_20241108_stage46`
+  - `okx_btc_market_state_5m_v0_3_20240520_20241108_stage46`
+  - `okx_btc_market_state_15m_v0_3_20240520_20241108_stage46`
+  - `okx_btc_market_state_1h_v0_3_20240520_20241108_stage46`
+- 每个 snapshot 均包含 data、`schema.json`、`feature_contract.md`、`quality_summary.json`、`source_manifest.json`、`data_admission_report.json` 与 forbidden raw access policy。
+- `snapshot_index.json` 已刷新，AlphaTenant 可机器读取 required filter、allowed/forbidden columns、feature group/role、forbidden usage 与 exchange consistency。
+- coverage matrix 与每个 v0.3 snapshot 的 readiness report 已生成。
+
+### ✅ P0 对应关系
+
+1. Snapshot / feature contract 角色边界：已实现。
+2. Opportunity set / activity eligibility 输入层：已实现为 `opportunity_context` / `activity` 相关 causal fields。
+3. Regime transition / volatility expansion 输入层：已实现为 `regime_input_context` fields。
+4. Cost / liquidity fragility 输入层：已实现为 `cost_liquidity_context` fields 与 row-level liquidity flags。
+5. 交易所一致性机器可读治理：已实现，OKX-only / OKX cross-market context，mixed exchange fail-closed。
+
+### ✅ P1 对应关系
+
+1. Tail / payoff shape 市场上下文：已实现为 `tail_risk_context` fields；无真实 OKX liquidation 时显式 unavailable。
+2. Dataset family coverage matrix：已实现。
+3. Row-level quality gate reason codes：已实现 `blocked_reason_codes`、`warning_reason_codes`、`source_family_missing_flags`、`source_family_stale_flags`。
+4. Multiple resolution / horizon-safe 聚合：已发布 1m / 5m / 15m / 1h；高周期只由 governed 1m 聚合，任一关键 source 1m row blocked 时高周期 fail-closed blocked。
+5. AlphaTenant Research Readiness Report：已为 v0.3 snapshots 生成。
+
+### 🔒 仍然禁止
+
+- 不生成 buy/sell/long/short 信号。
+- 不计算策略收益。
+- 不给 Level2 readiness。
+- 不给 ALLOW_PAPER 建议。
+- 不用 2025-2026 验证数据做策略选择或参数调优。
+- 不把 Binance 数据混入 OKX snapshot。
+- 不对缺失数据插值伪造。
+
+### ⚠️ 数据源真实边界
+
+- `open_interest`、`long_short_ratio`、`liquidation`、`taker_flow`、`mark_price`、`index_price` 当前仍按 coverage matrix 标记为 unavailable 或未进入 governed snapshot；未使用其他交易所代理。
+- 当前 orderbook 仍是 best-effort reconstructed without sequence/checksum，不能表述为严格 L2 readiness。
+

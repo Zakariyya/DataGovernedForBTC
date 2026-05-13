@@ -1,6 +1,6 @@
 # AlphaTenant Dataset Family Coverage Matrix
 
-Generated: `2026-05-13T04:30:02Z`
+Generated: `2026-05-13T06:39:48Z`
 
 Universe: `okx_spot_btc_usdt_with_okx_derivative_context`
 Exchange consistency: `single_exchange_okx_cross_market_context`; allowed exchanges: `okx`

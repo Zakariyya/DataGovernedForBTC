@@ -1,0 +1,25 @@
+{
+  "source_label": "target_2024-05-20_to_2024-11-08_with_orderbook",
+  "label": "target_2024-05-20_to_2024-11-08_with_orderbook_stage46",
+  "outputs": {
+    "1m": "/mnt/d/me/project/DataGovernedForBTC/data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=1m/sample=target_2024-05-20_to_2024-11-08_with_orderbook_stage46/curated_btc_market_state_1m.csv",
+    "5m": "/mnt/d/me/project/DataGovernedForBTC/data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=5m/sample=target_2024-05-20_to_2024-11-08_with_orderbook_stage46/curated_btc_market_state_5m.csv",
+    "15m": "/mnt/d/me/project/DataGovernedForBTC/data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=15m/sample=target_2024-05-20_to_2024-11-08_with_orderbook_stage46/curated_btc_market_state_15m.csv",
+    "1h": "/mnt/d/me/project/DataGovernedForBTC/data_lake/features/exchange=okx/dataset_type=curated_btc_market_state/interval=1h/sample=target_2024-05-20_to_2024-11-08_with_orderbook_stage46/curated_btc_market_state_1h.csv"
+  },
+  "quality_summaries": {
+    "1m": "/mnt/d/me/project/DataGovernedForBTC/reports/quality/curated_state_window_target_2024-05-20_to_2024-11-08_with_orderbook_stage46_summary.json",
+    "5m": "/mnt/d/me/project/DataGovernedForBTC/reports/quality/curated_state_5m_target_2024-05-20_to_2024-11-08_with_orderbook_stage46_summary.json",
+    "15m": "/mnt/d/me/project/DataGovernedForBTC/reports/quality/curated_state_15m_target_2024-05-20_to_2024-11-08_with_orderbook_stage46_summary.json",
+    "1h": "/mnt/d/me/project/DataGovernedForBTC/reports/quality/curated_state_1h_target_2024-05-20_to_2024-11-08_with_orderbook_stage46_summary.json"
+  },
+  "contract": "not_alpha_signal_not_level2_not_allow_paper",
+  "forbidden_usage": [
+    "trade_signal",
+    "order_generation",
+    "position_generation",
+    "parameter_selection",
+    "level2_approval",
+    "allow_paper_decision"
+  ]
+}

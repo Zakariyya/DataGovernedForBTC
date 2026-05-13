@@ -1,0 +1,74 @@
+{
+  "schema_version": "datagoverned.alpha_tenant_research_readiness_report.v1",
+  "generated_at_utc": "2026-05-13T06:42:08Z",
+  "snapshot_id": "okx_btc_market_state_5m_v0_3_20240520_20241108_stage46",
+  "universe_id": "okx_spot_btc_usdt_with_okx_derivative_context",
+  "exchange_consistency_status": {
+    "exchange_consistency_scope": "single_exchange_okx_cross_market_context",
+    "allowed_source_exchanges": [
+      "okx"
+    ],
+    "mixed_exchange_features_present": false,
+    "mixed_exchange_usage_policy": "fail_closed",
+    "cross_exchange_authorization_required": false
+  },
+  "research_window_start": "2024-05-19T16:05:00Z",
+  "research_window_end": "2024-11-08T16:00:00Z",
+  "sealed_verification_boundary": "2025-01-01T00:00:00Z",
+  "row_count": 49824,
+  "allowed_row_count": 33116,
+  "blocked_row_count": 16708,
+  "allowed_ratio": 0.6646596017983302,
+  "dataset_family_coverage": {
+    "matrix_path": "reports/coverage/alpha_tenant_dataset_family_coverage_matrix.json",
+    "summary": {}
+  },
+  "feature_group_coverage": {
+    "borrowing_context": 6,
+    "cost_liquidity_context": 16,
+    "data_quality_context": 41,
+    "funding_context": 4,
+    "opportunity_context": 1,
+    "orderbook_microstructure": 15,
+    "price_context": 19,
+    "regime_input_context": 5,
+    "tail_risk_context": 3,
+    "trade_flow_context": 7,
+    "volatility_context": 16
+  },
+  "missing_stale_blocked_summary": {
+    "blocked_reason_code_counts": {},
+    "warning_reason_code_counts": {},
+    "source_family_missing_flag_counts": {},
+    "source_family_stale_flag_counts": {}
+  },
+  "no_lookahead_checks": {
+    "all_features_available_time_lte_feature_time": true,
+    "rolling_features_use_current_and_past_only": true,
+    "future_window_regime_confirmation_used": false,
+    "strategy_pnl_used_in_features": false
+  },
+  "future_leak_violation_count": 0,
+  "required_filter": "allow_into_feature_layer == True",
+  "allowed_alpha_tenant_use": [
+    "coverage_audit",
+    "structural_hypothesis_preregistration",
+    "research_only_feature_matrix",
+    "regime_input_research",
+    "no_lookahead_alignment",
+    "forward_observation_input"
+  ],
+  "forbidden_alpha_tenant_use": [
+    "live_trading",
+    "paper_trading_permission",
+    "level2_auto_upgrade",
+    "parameter_selection",
+    "direct_trade_signal",
+    "cross_exchange_proxy"
+  ],
+  "readiness_status": "research_ready_with_row_level_quality_filter",
+  "notes": [
+    "This is a research data-readiness report, not a strategy return report.",
+    "It is not Level2 readiness and not ALLOW_PAPER evidence."
+  ]
+}

@@ -89,6 +89,29 @@ def infer_feature_group(column: str) -> str:
         return "data_quality_context"
     if c in META_COLUMNS or c.startswith("source_") or c in {"schema_version", "feature_version", "governance_version"}:
         return "data_quality_context"
+    if c in {
+        "spread_bps",
+        "spread_percentile_causal",
+        "top_of_book_depth_usd",
+        "depth_10bps_usd",
+        "depth_25bps_usd",
+        "orderbook_imbalance_near_mid",
+        "trade_volume_usd_1m",
+        "trade_volume_usd_5m",
+        "volume_drought_flag",
+        "orderbook_stale_ms",
+        "orderbook_reconstruction_quality",
+        "crossed_book_flag",
+        "update_without_snapshot_count",
+        "liquidity_fragility_flag",
+        "estimated_minimum_slippage_bucket",
+        "orderbook_missing",
+        "orderbook_stale",
+        "spread_unavailable",
+        "depth_unavailable",
+        "liquidity_context_unreliable",
+    }:
+        return "cost_liquidity_context"
     if "funding" in c:
         return "funding_context"
     if "borrow" in c:
@@ -149,7 +172,7 @@ def truthy(value: Any) -> bool:
     return value is True or str(value).lower() == "true"
 
 
-def compute_admission_report(*, snapshot_id: str, label: str, summary: dict[str, Any], columns: list[str], rows: list[dict[str, str]]) -> dict[str, Any]:
+def compute_admission_report(*, snapshot_id: str, label: str, summary: dict[str, Any], columns: list[str], rows: list[dict[str, str]], dataset_type: str = "curated_btc_market_state_1m", interval: str = "1m") -> dict[str, Any]:
     versions = GovernanceVersions()
     allow_rows = sum(1 for r in rows if truthy(r.get("allow_into_feature_layer")))
     future_leaks = sum(int(float(r.get("future_leak_violation_count") or 0)) for r in rows)
@@ -174,11 +197,11 @@ def compute_admission_report(*, snapshot_id: str, label: str, summary: dict[str,
     blocked = row_count - allow_rows
     return {
         "snapshot_id": snapshot_id,
-        "dataset_type": "curated_btc_market_state_1m",
+        "dataset_type": dataset_type,
         "label": label,
         "instrument_name": "BTC-USDT",
         "exchange": "okx",
-        "interval": "1m",
+        "interval": interval,
         "window_start": summary.get("window_start"),
         "window_end": summary.get("window_end"),
         "min_feature_time_ms": min_feature_time,
@@ -204,8 +227,14 @@ def compute_admission_report(*, snapshot_id: str, label: str, summary: dict[str,
     }
 
 
-def build_schema(columns: list[str]) -> dict[str, Any]:
-    governance_columns = [c for c in columns if c in GOVERNANCE_COLUMNS or c.endswith("_missing_reason") or c.endswith("_quality_score")]
+def build_schema(columns: list[str], dataset_type: str = "curated_btc_market_state_1m") -> dict[str, Any]:
+    governance_columns = [
+        c for c in columns
+        if c in GOVERNANCE_COLUMNS
+        or c.endswith("_missing_reason")
+        or c.endswith("_quality_score")
+        or infer_feature_group(c) == "data_quality_context"
+    ]
     meta_columns = [c for c in columns if c in META_COLUMNS]
     allowed_feature_columns = [
         c for c in columns
@@ -220,7 +249,7 @@ def build_schema(columns: list[str]) -> dict[str, Any]:
     feature_group = {c: infer_feature_group(c) for c in columns}
     feature_role = {c: infer_feature_role(c, allowed_feature_columns=allowed_set) for c in columns}
     return {
-        "dataset_type": "curated_btc_market_state_1m",
+        "dataset_type": dataset_type,
         "columns": columns,
         "meta_columns": meta_columns,
         "governance_columns": governance_columns,
@@ -338,9 +367,18 @@ def snapshot_dirs(root: Path) -> list[Path]:
     return sorted(p for p in base.rglob("snapshot_id=*") if p.is_dir())
 
 
-def require_snapshot_files(snapshot_dir: Path) -> dict[str, str]:
+def snapshot_data_filename(interval: str) -> str:
+    return f"curated_btc_market_state_{interval}.csv"
+
+
+def snapshot_summary_filename(interval: str, label: str) -> str:
+    return f"curated_state_window_{label}_summary.json" if interval == "1m" else f"curated_state_{interval}_{label}_summary.json"
+
+
+def require_snapshot_files(snapshot_dir: Path, interval: str | None = None) -> dict[str, str]:
+    interval = interval or snapshot_dir.parent.name.removeprefix("interval=")
     files = {
-        "data": "curated_btc_market_state_1m.csv",
+        "data": snapshot_data_filename(interval),
         "data_admission_report": "data_admission_report.json",
         "source_manifest": "source_manifest.json",
         "quality_summary": "quality_summary.json",
@@ -576,28 +614,32 @@ def run_snapshot_list(root: Path, for_alphatenant: bool = False, output_format: 
     raise ValueError(f"unsupported snapshot-list format: {output_format}")
 
 
-def run_snapshot_admission(root: Path, label: str, snapshot_id: str | None = None) -> dict[str, Any]:
-    snapshot_id = snapshot_id or f"okx_btc_market_state_1m_v0_1_{label}"
-    curated_path = root / "data_lake" / "features" / "exchange=okx" / "dataset_type=curated_btc_market_state" / "interval=1m" / f"sample={label}" / "curated_btc_market_state_1m.csv"
-    summary_path = root / "reports" / "quality" / f"curated_state_window_{label}_summary.json"
+def run_snapshot_admission(root: Path, label: str, snapshot_id: str | None = None, interval: str = "1m") -> dict[str, Any]:
+    if interval not in {"1m", "5m", "15m", "1h"}:
+        raise ValueError(f"unsupported snapshot interval: {interval}")
+    snapshot_id = snapshot_id or f"okx_btc_market_state_{interval}_v0_1_{label}"
+    dataset_type = f"curated_btc_market_state_{interval}"
+    data_filename = snapshot_data_filename(interval)
+    curated_path = root / "data_lake" / "features" / "exchange=okx" / "dataset_type=curated_btc_market_state" / f"interval={interval}" / f"sample={label}" / data_filename
+    summary_path = root / "reports" / "quality" / snapshot_summary_filename(interval, label)
     if not curated_path.exists():
         raise FileNotFoundError(f"curated state not found: {curated_path}")
     if not summary_path.exists():
         raise FileNotFoundError(f"curated quality summary not found: {summary_path}")
     columns, rows = read_curated_rows(curated_path)
     summary = read_json(summary_path)
-    snapshot_dir = root / "snapshots" / "exchange=okx" / "instrument=BTC-USDT" / "interval=1m" / f"snapshot_id={snapshot_id}"
+    snapshot_dir = root / "snapshots" / "exchange=okx" / "instrument=BTC-USDT" / f"interval={interval}" / f"snapshot_id={snapshot_id}"
     snapshot_dir.mkdir(parents=True, exist_ok=True)
 
-    snapshot_curated = snapshot_dir / "curated_btc_market_state_1m.csv"
+    snapshot_curated = snapshot_dir / data_filename
     shutil.copy2(curated_path, snapshot_curated)
     quality_summary_path = snapshot_dir / "quality_summary.json"
     write_json(quality_summary_path, summary)
 
-    report = compute_admission_report(snapshot_id=snapshot_id, label=label, summary=summary, columns=columns, rows=rows)
+    report = compute_admission_report(snapshot_id=snapshot_id, label=label, summary=summary, columns=columns, rows=rows, dataset_type=dataset_type, interval=interval)
     write_json(snapshot_dir / "data_admission_report.json", report)
 
-    schema = build_schema(columns)
+    schema = build_schema(columns, dataset_type=dataset_type)
     write_json(snapshot_dir / "schema.json", schema)
 
     source_manifest = {
