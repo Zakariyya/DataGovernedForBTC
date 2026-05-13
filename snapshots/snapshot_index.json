@@ -1,7 +1,7 @@
 {
   "schema_version": "datagoverned.snapshot_index.v0",
   "publisher": "DataGovernedForBTC",
-  "generated_at_utc": "2026-05-13T06:38:10Z",
+  "generated_at_utc": "2026-05-13T07:13:12Z",
   "project_root": "/mnt/d/me/project/DataGovernedForBTC",
   "consumer_contract": "alphatenant.governed_snapshot.v0",
   "index_status": "ready",
@@ -2465,7 +2465,7 @@
       "missing_core_files": []
     }
   ],
-  "git_commit": "b4fac3a",
+  "git_commit": "c76e497",
   "generator": {
     "name": "datagovernedforbtc.snapshot.build_snapshot_index",
     "command": "snapshot-list --for-alphatenant --format json"
